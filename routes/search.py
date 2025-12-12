@@ -153,8 +153,6 @@ def search_person():
         if reference_photo_id:
             logger.info(f"ReferencePhotoId provided: {reference_photo_id}; downloading from storage")
 
-        logger.info(f"Received search request for query: {query}")
-
         # Normalize query for cache lookup
         normalized_query = normalize_query(query)
         
@@ -174,7 +172,6 @@ def search_person():
         # If we received a referencePhotoId, download the image from Supabase and store locally
         if reference_photo_id:
             try:
-                # Download bytes from 'reference-photos' bucket
                 reference_bytes = supabase_client.client.storage.from_('reference-photos').download(reference_photo_id)
 
                 # Persist locally as a temp file for any downstream processing that needs a path
@@ -185,7 +182,7 @@ def search_person():
 
                 # Provide base64 to aggregation for Rekognition verification of photos
                 reference_photo = base64.b64encode(reference_bytes).decode('ascii')
-                logger.info(f"Downloaded reference image and stored at {reference_temp_path}")
+                logger.info(f"Downloaded reference image and stored at {reference_temp_path}\n")
             except Exception as e:
                 logger.warning(f"Failed to download reference photo '{reference_photo_id}': {e}")
                 reference_photo = None
@@ -201,15 +198,13 @@ def search_person():
             person = Person.from_dict(cached_person)
             return jsonify(person.to_response()), 200
 
-        logger.info(f"Cache miss for '{cache_key}' — performing fresh search")
-
+        logger.info(f"Cache miss for '{cache_key}' — performing fresh search\n")
         # Initialize services for fresh search
         websearch_service = get_websearch_service()
         apify_service = get_apify_service()
         aggregation_service = get_aggregation_service()
 
 
-        
         if candidate:
             logger.info(f"Deep search requested for candidate: {candidate.get('name')}")
             # Use candidate info as the base for structured data
@@ -275,17 +270,18 @@ def search_person():
         # Step 3: Identify social media handles
         logger.info("Step 3: Identifying social media handles...")
         identifiers = extract_social_identifiers(query, structured_info)
-        logger.info(f"Identified social handles: {identifiers}")
+        logger.info(f"Identified social handles: {identifiers}\n")
 
         # Fallback: If key social profiles are missing, try to find them via Apify Google Search
         # We check for at least one major platform or if the list is empty
         if not identifiers or (not identifiers.get('instagram') and not identifiers.get('twitter') and not identifiers.get('linkedin')):
-            logger.info("Key social profiles missing. Attempting fallback search via Apify...")
+            
+            logger.info("Key social profiles missing. Attempting fallback search via Apify...\n")
             fallback_links = apify_service.find_social_links(query)
             
             # Merge fallback links into identifiers
             if fallback_links:
-                logger.info(f"Merging fallback links: {fallback_links}")
+                logger.info(f"Merging fallback links: {fallback_links}\n")
                 identifiers.update(fallback_links)
                 
                 # Also update structured_info so it's reflected in the final response
@@ -305,6 +301,7 @@ def search_person():
                         })
 
         # Step 4: Execute Parallel Tasks (Social Scraping + Answer Generation)
+        
         logger.info("Step 4: Executing parallel tasks (Scraping + Answer Generation)...")
         
         apify_results = []
@@ -384,7 +381,6 @@ def search_person():
                  try:
                      from services.pdl_service import get_pdl_service
                      pdl_service = get_pdl_service()
-                     logger.info(f"Running PDL Enrichment with params: {pdl_params.keys()}")
                      return pdl_service.enrich_person(pdl_params)
                  except Exception as e:
                      logger.error(f"Error running PDL enrichment: {e}")
@@ -404,6 +400,9 @@ def search_person():
             if generated_answer:
                 answer_generated_at = datetime.utcnow()
 
+            logger.info("Parallel tasks completed.\n")
+
+
         # Step 5: Aggregate all data
         logger.info("Step 5: Aggregating data from all sources...")
         aggregated_data = aggregation_service.aggregate_person_data(
@@ -418,18 +417,19 @@ def search_person():
         # Step 5.5: Google image fallback (triggers when no photos or all proxying failed)
         existing_photos = aggregated_data.get("photos", [])
         if existing_photos:
-            logger.info(f"Found {len(existing_photos)} photos from direct sources; skipping Google fallback.")
+            logger.info(f"Found {len(existing_photos)} photos from direct sources; skipping Google fallback.\n")
         else:
             logger.info("No photos from direct sources; fetching from Google Images...")
             google_photos = fetch_google_image_urls(query)
             if google_photos:
-                logger.info(f"Google Images provided {len(google_photos)} photos")
+                logger.info(f"Google Images provided {len(google_photos)} photos\n")
                 aggregated_data["photos"] = google_photos
             else:
-                logger.warning("Google Images fallback also returned no photos")
+                logger.warning("Google Images fallback also returned no photos\n")
                 aggregated_data["photos"] = []
 
         # Step 6: Create Person object
+        logger.info("Step 6: Creating Person object...\n")
         person = Person(
             query=cache_key,
             basic_info=aggregated_data.get('basic_info'),
@@ -443,11 +443,11 @@ def search_person():
         )
 
         # Step 7: Store in Supabase
-        logger.info("Step 6: Storing results in database...")
+        logger.info("Step 7: Storing results in database...\n")
         stored_person = supabase_client.create_person(person.to_dict())
 
         if not stored_person:
-            logger.error("Failed to store person in database")
+            logger.error("Failed to store person in database\n")
             return jsonify({'error': 'Failed to store results'}), 500
 
         # Update person with ID from database
@@ -455,9 +455,7 @@ def search_person():
 
         logger.info(f"Search completed successfully for query: {query}")
 
-        # Return response
         response_json = jsonify(person.to_response())
-        # Cleanup temp reference file if created
         if reference_temp_path and os.path.exists(reference_temp_path):
             try:
                 os.remove(reference_temp_path)
@@ -467,7 +465,6 @@ def search_person():
 
     except Exception as e:
         logger.error(f"Error in search endpoint: {str(e)}", exc_info=True)
-        # Attempt cleanup on error as well
         if 'reference_temp_path' in locals() and reference_temp_path and os.path.exists(reference_temp_path):
             try:
                 os.remove(reference_temp_path)

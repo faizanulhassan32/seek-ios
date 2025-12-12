@@ -56,7 +56,7 @@ class WebSearchService:
                 logger.warning(f"Failed to parse JSON response, using raw content")
                 structured_data = {'raw_content': result}
 
-            logger.info(f"Websearch completed for query: {query}")
+            logger.info(f"Websearch completed for query: {query}\n")
 
             return {
                 'source': 'openai_websearch',
@@ -92,6 +92,8 @@ class WebSearchService:
         Returns:
             Structured dictionary with categorized information
         """
+
+        logger.info(f"Extracting structured information for query: {query}")
         try:
             input_prompt = f"""
             You are a data extraction assistant. Extract and structure information about a person into these categories:
@@ -117,6 +119,7 @@ class WebSearchService:
 
             import json
             structured_data = json.loads(response.output_text)
+            logger.info(f"Structured information extracted for query: {query}\n")
             return structured_data
 
         except Exception as e:
@@ -180,7 +183,23 @@ class WebSearchService:
         
         try:
             import json
-            candidates_json = json.dumps(candidates, indent=2)
+            
+            # Store original descriptions and truncate for LLM processing
+            original_descriptions = {}
+            truncated_candidates = []
+            
+            for candidate in candidates:
+                candidate_copy = candidate.copy()
+                original_desc = candidate.get('description', '')
+                original_descriptions[candidate.get('id', '')] = original_desc
+                
+                # Truncate description to first 500 characters
+                if len(original_desc) > 500:
+                    candidate_copy['description'] = original_desc[:500] + '...'
+                
+                truncated_candidates.append(candidate_copy)
+            
+            candidates_json = json.dumps(truncated_candidates, indent=2)
             input_prompt = f"""
             You are a data deduplication expert. I have a list of person candidates found from search results.
             Some of them refer to the same real-world person but might have slightly different names or descriptions.
@@ -214,6 +233,13 @@ class WebSearchService:
             try:
                 data = json.loads(response.output_text)
                 deduplicated = data.get("candidates", [])
+                
+                # Restore original descriptions
+                for candidate in deduplicated:
+                    candidate_id = candidate.get('id', '')
+                    if candidate_id in original_descriptions:
+                        candidate['description'] = original_descriptions[candidate_id]
+                
                 logger.info(f"Deduplication complete. Reduced from {len(candidates)} to {len(deduplicated)}")
                 return deduplicated
             except json.JSONDecodeError:

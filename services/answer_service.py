@@ -176,8 +176,6 @@ class AnswerService:
 
             logger.info(f"Generating related questions for query: {query}")
 
-            logger.info(f"Generating related questions for query: {query}")
-
             input_prompt = f"""
             You are an assistant that generates relevant follow-up questions about people. 
             Generate 6 relevant follow-up questions about {query}. 
@@ -264,8 +262,6 @@ class AnswerService:
             response = self.client.responses.create(
                 model="gpt-4o-mini", # Use cheap fast model
                 input=input_prompt,
-                reasoning={ "effort": "low" },
-                text={ "verbosity": "concise" }
             )
             
             # Simple parsing since responses API might return text or JSON-like text

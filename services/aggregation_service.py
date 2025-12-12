@@ -105,9 +105,9 @@ class AggregationService:
 
         # Phase 2: Verify photos with reference image if provided
         if reference_photo and photos:
-            logger.info(f"Phase 2: Verifying {len(photos)} photos against reference image")
+            logger.info(f"Phase 2: Verifying {len(photos)} photos against reference image\n")
             photos = self._verify_photos_with_reference(photos, reference_photo)
-            logger.info(f"Phase 2: {len(photos)} photos verified successfully")
+            logger.info(f"Phase 2: {len(photos)} photos verified successfully\n")
 
         # --- PROXY IMAGES ---
         # Collect all URLs that need proxying
@@ -219,7 +219,7 @@ class AggregationService:
             'raw_sources': raw_sources
         }
 
-        logger.info(f"Aggregation complete. Found {len(social_profiles)} social profiles, {len(photos)} photos")
+        logger.info(f"Aggregation complete. Found {len(social_profiles)} social profiles, {len(photos)} photos\n")
 
         return aggregated_data
 
@@ -274,6 +274,8 @@ class AggregationService:
                         # Log rejected photo for debugging
                         logger.debug(f"Photo {idx} rejected: {similarity:.1f}% < {similarity_threshold}%")
                         
+                    logger.info(f"Completed Rekognition comparison for photo {idx}\n")
+
                 except Exception as e:
                     logger.warning(f"Rekognition comparison failed for photo {idx}: {e}")
                     # Don't include this photo if verification failed
@@ -424,6 +426,7 @@ class AggregationService:
                 merged[key] = value
 
         return merged
+    
     def _extract_public_records(self, data: Dict) -> Dict:
         """
         Extract relatives and locations from raw OSINT text 
@@ -466,6 +469,7 @@ class AggregationService:
              records['locations'] = list(set(loc_matches))[:5]
              
         return records
+    
     def _deduplicate_list(self, items: List[Dict], key: str) -> List[Dict]:
         """Deduplicate a list of dictionaries based on a key"""
         seen = set()
