@@ -53,8 +53,6 @@ class AnswerService:
                 reasoning={ "effort": "low" },
                 text={ "verbosity": "low" }
             )
-
-            answer = response.output_text.strip()
             
             answer = response.output_text.strip()
             

@@ -63,6 +63,7 @@ class ImageProxyService:
 
         # Retry logic with exponential backoff
         max_retries = 3
+        response = None
         for attempt in range(max_retries):
             try:
                 response = requests.get(url, headers=headers, timeout=15)
@@ -88,14 +89,17 @@ class ImageProxyService:
                         logger.warning(f"Image content too small ({len(response.content)} bytes): {url}")
                         return None
 
-                    self.supabase.upload_file(
-                        bucket=self.bucket_name,
-                        path=storage_path,
-                        file_data=response.content,
-                        content_type=content_type
-                    )
-
-                    return self.supabase.get_public_url(self.bucket_name, storage_path)
+                    try:
+                        self.supabase.upload_file(
+                            bucket=self.bucket_name,
+                            path=storage_path,
+                            file_data=response.content,
+                            content_type=content_type
+                        )
+                        return self.supabase.get_public_url(self.bucket_name, storage_path)
+                    except Exception as upload_error:
+                        logger.error(f"Error uploading file to Supabase for {url}: {str(upload_error)}")
+                        return None
 
                 elif response.status_code == 429:
                     # Rate limited - retry with backoff
