@@ -189,15 +189,19 @@ class WebSearchService:
             - If two entries refer to the same person (e.g. "Elon Musk" and "Elon Reeve Musk"), merge them.
             - If they have the same name but different descriptions (e.g. "John Smith (Actor)" vs "John Smith (Doctor)"), KEEP THEM SEPARATE.
             - Do NOT merge if you are unsure. Better to show duplicates than to hide a valid candidate.
+            
+            When merging duplicates:
             - Pick the most complete/common name (Cleaned: remove titles/prefixes).
             - Pick the most descriptive description (Format: "Occupation • Location").
-            - Pick the best image URL (prefer non-null).
+            - Pick the best image URL (prefer non-null). CRITICAL: You MUST include the "imageUrl" field in every output candidate, even if null.
             - Keep the ID of the primary entry.
+            - PRESERVE ALL OTHER FIELDS from the original candidates (like link, snippet, etc).
             
             Candidates:
             {candidates_json}
             
             Return a JSON object with a key "candidates" containing the deduplicated list.
+            Each candidate MUST have at minimum: id, name, description, imageUrl (can be null).
             """
             
             response = self.client.responses.create(
