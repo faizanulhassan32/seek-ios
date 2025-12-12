@@ -1,6 +1,7 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 from utils.logger import setup_logger
 import re
+import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from services.image_proxy_service import get_image_proxy_service
 
@@ -18,7 +19,8 @@ class AggregationService:
         websearch_result: Dict,
         apify_results: List[Dict],
         structured_info: Dict,
-        pdl_data: Dict = None
+        pdl_data: Dict = None,
+        reference_photo: str = None
     ) -> Dict:
         """
         Aggregate data from all sources into a unified Person schema
@@ -100,6 +102,12 @@ class AggregationService:
         # Deduplicate social profiles and photos
         social_profiles = self._deduplicate_list(social_profiles, key='platform')
         photos = self._deduplicate_list(photos, key='url')
+
+        # Phase 2: Verify photos with reference image if provided
+        if reference_photo and photos:
+            logger.info(f"Phase 2: Verifying {len(photos)} photos against reference image")
+            photos = self._verify_photos_with_reference(photos, reference_photo)
+            logger.info(f"Phase 2: {len(photos)} photos verified successfully")
 
         # --- PROXY IMAGES ---
         # Collect all URLs that need proxying
@@ -214,6 +222,69 @@ class AggregationService:
         logger.info(f"Aggregation complete. Found {len(social_profiles)} social profiles, {len(photos)} photos")
 
         return aggregated_data
+
+    def _verify_photos_with_reference(self, photos: List[Dict], reference_photo: str) -> List[Dict]:
+        """
+        Phase 2: Verify photos against a reference image using AWS Rekognition.
+        Filters photos to keep only those with >= 90% similarity to the reference.
+        
+        Args:
+            photos: List of photo dicts with 'url' field
+            reference_photo: Base64-encoded reference image (from user's candidate selection)
+            
+        Returns:
+            Filtered list of verified photos
+        """
+        if not photos or not reference_photo:
+            return photos
+            
+        try:
+            from services.rekognition_service import get_rekognition_service
+            rekognition = get_rekognition_service()
+            
+            # Decode reference photo
+            try:
+                reference_bytes = base64.b64decode(reference_photo)
+            except Exception as e:
+                logger.warning(f"Failed to decode reference photo: {e}")
+                return photos
+            
+            verified_photos = []
+            similarity_threshold = 90.0  # 90% confidence threshold
+            
+            for idx, photo in enumerate(photos):
+                photo_url = photo.get('url')
+                if not photo_url:
+                    logger.debug(f"Photo {idx} has no URL, skipping")
+                    continue
+                
+                try:
+                    similarity = rekognition.compare_faces_bytes(reference_bytes, photo_url)
+                    
+                    if similarity is None:
+                        similarity = 0.0
+                    
+                    logger.info(f"Photo {idx} ({photo.get('source', 'unknown')}): {similarity:.1f}% - {'✅ KEPT' if similarity >= similarity_threshold else '❌ REJECTED'}")
+                    
+                    if similarity >= similarity_threshold:
+                        photo['verified'] = True
+                        photo['similarity'] = round(similarity, 2)
+                        verified_photos.append(photo)
+                    else:
+                        # Log rejected photo for debugging
+                        logger.debug(f"Photo {idx} rejected: {similarity:.1f}% < {similarity_threshold}%")
+                        
+                except Exception as e:
+                    logger.warning(f"Rekognition comparison failed for photo {idx}: {e}")
+                    # Don't include this photo if verification failed
+            
+            logger.info(f"Photo verification complete: {len(verified_photos)}/{len(photos)} photos verified")
+            return verified_photos
+            
+        except Exception as e:
+            logger.error(f"Error in photo verification: {e}")
+            # Fallback: return original photos if verification service fails
+            return photos
 
     def _proxy_images_parallel(self, urls: List[str]) -> Dict[str, str]:
         """

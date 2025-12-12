@@ -1,11 +1,14 @@
 from flask import Blueprint, request, jsonify
 import os
 import tempfile
+import uuid
 from typing import List, Dict
+from datetime import datetime
 
 from services.websearch_service import get_websearch_service
 from services.serpapi_service import get_serpapi_service
 from services.rekognition_service import get_rekognition_service
+from db.supabase_client import get_supabase_client
 from utils.logger import setup_logger
 
 logger = setup_logger('candidates_route')
@@ -292,13 +295,29 @@ def get_candidates_ranked():
         else:
             logger.info("Skipping LLM deduplication for PDL candidates")
 
+        # Store reference photo in Supabase bucket if provided
+        reference_photo_id = None
+        if reference_bytes:
+            try:
+                supabase = get_supabase_client()
+                photo_id = f"{datetime.utcnow().isoformat()}_{uuid.uuid4()}.jpg"
+                supabase.client.storage.from_('reference-photos').upload(
+                    path=photo_id,
+                    file=reference_bytes,
+                    file_options={"content-type": "image/jpeg"}
+                )
+                reference_photo_id = photo_id
+                logger.info(f"Stored reference photo in bucket: {reference_photo_id}")
+            except Exception as e:
+                logger.warning(f"Failed to store reference photo: {e}")
+
         # If no reference file, just rank by current order with zero scores
         if not reference_bytes:
             logger.info("No reference image provided; returning candidates with similarityScore=0")
             for idx, c in enumerate(candidates, start=1):
                 c['similarityScore'] = 0.0
                 c['rank'] = idx
-            return jsonify({'query': base_query, 'candidates': candidates}), 200
+            return jsonify({'query': base_query, 'candidates': candidates, 'referencePhotoId': reference_photo_id}), 200
 
         logger.info(f"Starting Rekognition face comparison for {len(candidates)} candidates")
         rekognition = get_rekognition_service()
@@ -319,7 +338,7 @@ def get_candidates_ranked():
 
         candidates = _rank_by_score(candidates)
         logger.info(f"Ranking complete. Top candidate: {candidates[0].get('name')} with score {candidates[0].get('similarityScore')}")
-        return jsonify({'query': base_query, 'candidates': candidates}), 200
+        return jsonify({'query': base_query, 'candidates': candidates, 'referencePhotoId': reference_photo_id}), 200
 
     except Exception as e:
         logger.error(f"Error in /candidates/ranked: {e}", exc_info=True)

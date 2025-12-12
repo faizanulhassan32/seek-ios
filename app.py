@@ -10,11 +10,15 @@ from routes.followup import followup_bp
 from routes.candidates import candidates_bp
 from routes.auth import auth_bp
 from utils.logger import setup_logger
+from utils.cleanup_scheduler import start_cleanup_scheduler
 
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
+# Start background cleanup scheduler for reference photos
+cleanup_scheduler = start_cleanup_scheduler()
 
 logger = setup_logger()
 

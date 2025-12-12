@@ -2,6 +2,8 @@ from flask import Blueprint, request, jsonify
 from typing import Dict, List, Optional
 import os
 import requests
+import base64
+import tempfile
 from services.websearch_service import get_websearch_service
 from services.apify_service import get_apify_service
 from services.aggregation_service import get_aggregation_service
@@ -143,6 +145,14 @@ def search_person():
         if not query:
             return jsonify({'error': 'Query cannot be empty'}), 400
 
+        # Optional reference photo for Phase 2 face verification via Supabase ID
+        reference_photo_id = data.get('referencePhotoId')
+        reference_photo = None  # base64 populated only after download
+        reference_temp_path = None
+        reference_bytes = None
+        if reference_photo_id:
+            logger.info(f"ReferencePhotoId provided: {reference_photo_id}; downloading from storage")
+
         logger.info(f"Received search request for query: {query}")
 
         # Normalize query for cache lookup
@@ -161,8 +171,30 @@ def search_person():
         # Initialize Supabase client
         supabase_client = get_supabase_client()
 
+        # If we received a referencePhotoId, download the image from Supabase and store locally
+        if reference_photo_id:
+            try:
+                # Download bytes from 'reference-photos' bucket
+                reference_bytes = supabase_client.client.storage.from_('reference-photos').download(reference_photo_id)
+
+                # Persist locally as a temp file for any downstream processing that needs a path
+                suffix = os.path.splitext(reference_photo_id)[1] or '.jpg'
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix='ref_download_') as tmp:
+                    tmp.write(reference_bytes)
+                    reference_temp_path = tmp.name
+
+                # Provide base64 to aggregation for Rekognition verification of photos
+                reference_photo = base64.b64encode(reference_bytes).decode('ascii')
+                logger.info(f"Downloaded reference image and stored at {reference_temp_path}")
+            except Exception as e:
+                logger.warning(f"Failed to download reference photo '{reference_photo_id}': {e}")
+                reference_photo = None
+
         # Check cache first using the specific cache key
-        cached_person = supabase_client.get_person_by_query(cache_key)
+        # If a reference photo ID is provided, bypass cache to ensure verification is applied
+        cached_person = None
+        if not reference_photo_id:
+            cached_person = supabase_client.get_person_by_query(cache_key)
         if cached_person:
             logger.info(f"Cache hit for '{cache_key}' — returning cached result")
             # Convert cached dict to Person object and return
@@ -379,7 +411,8 @@ def search_person():
             websearch_result,
             apify_results,
             structured_info,
-            pdl_data
+            pdl_data,
+            reference_photo=reference_photo  # Pass reference photo for Phase 2 verification
         )
 
         # Step 5.5: Google image fallback (triggers when no photos or all proxying failed)
@@ -423,10 +456,23 @@ def search_person():
         logger.info(f"Search completed successfully for query: {query}")
 
         # Return response
-        return jsonify(person.to_response()), 200
+        response_json = jsonify(person.to_response())
+        # Cleanup temp reference file if created
+        if reference_temp_path and os.path.exists(reference_temp_path):
+            try:
+                os.remove(reference_temp_path)
+            except Exception as e:
+                logger.warning(f"Failed to remove temp reference file: {reference_temp_path} ({e})")
+        return response_json, 200
 
     except Exception as e:
         logger.error(f"Error in search endpoint: {str(e)}", exc_info=True)
+        # Attempt cleanup on error as well
+        if 'reference_temp_path' in locals() and reference_temp_path and os.path.exists(reference_temp_path):
+            try:
+                os.remove(reference_temp_path)
+            except Exception:
+                pass
         return jsonify({'error': 'Internal server error', 'details': str(e)}), 500
 
 
