@@ -31,70 +31,83 @@ class SerpApiService:
             return []
             
         try:
-            params = {
+            pages_to_scroll=4
+            base_params = {
                 "q": query,
                 "api_key": self.api_key,
                 "engine": "google",
                 "google_domain": "google.com",
                 "gl": "us",
-                "hl": "en"
+                "hl": "en",
+                "num": pages_to_scroll
             }
             
-            logger.info(f"Fetching candidates from SerpApi for: {query}")
-            response = requests.get(self.BASE_URL, params=params)
-            response.raise_for_status()
-            data = response.json()
+            logger.info(f"Fetching candidates from SerpApi for: {query} ({pages_to_scroll}) pages)")
             
-            # Log raw response for debugging as requested
-            logger.info(f"SerpApi raw response keys: {list(data.keys())}")
-            
-            # Collect all raw candidates first
             raw_candidates = []
-            
-            # 1. Check Knowledge Graph (High confidence)
-            if "knowledge_graph" in data:
-                kg = data["knowledge_graph"]
-                candidate = self._parse_knowledge_graph(kg)
-                if candidate:
-                    raw_candidates.append(candidate)
+            for page in range(pages_to_scroll):
+
+                params = {**base_params, "start": page * pages_to_scroll}
+                
+                try:
+                    response = requests.get(self.BASE_URL, params=params)
+                    response.raise_for_status()
+                    data = response.json()
                     
-            # 2. Check Organic Results (Profiles)
-            profile_domains = ['wikipedia.org', 'imdb.com', 'linkedin.com', 'forbes.com', 'crunchbase.com', 'twitter.com', 'instagram.com']
-            for result in data.get("organic_results", []):
-                link = result.get("link", "")
-                if any(domain in link for domain in profile_domains):
-                    candidate = self._parse_organic_result(result)
-                    if candidate:
-                        raw_candidates.append(candidate)
-            
-            # 3. Check Related Searches
-            if "related_searches" in data:
-                for related in data["related_searches"]:
-                    candidate = self._parse_related_search(related)
-                    if candidate:
-                        raw_candidates.append(candidate)
+                    logger.info(f"Page {page+1}: {list(data.keys())}")
+                    
+                    # 1. Check Knowledge Graph (High confidence) - first page only
+                    if page == 0 and "knowledge_graph" in data:
+                        kg = data["knowledge_graph"]
+                        candidate = self._parse_knowledge_graph(kg)
+                        if candidate:
+                            raw_candidates.append(candidate)
+                            
+                    # 2. Check Organic Results (accept all, no domain filtering)
+                    for result in data.get("organic_results", []):
+                        candidate = self._parse_organic_result(result)
+                        if candidate:
+                            raw_candidates.append(candidate)
+                    
+                    # 3. Check Related Searches - first page only
+                    if page == 0 and "related_searches" in data:
+                        for related in data["related_searches"]:
+                            candidate = self._parse_related_search(related)
+                            if candidate:
+                                raw_candidates.append(candidate)
+                                
+                except Exception as page_err:
+                    logger.warning(f"Page {page+1} error: {page_err}")
 
             # Deduplication Logic
-            unique_candidates = {}
+            unique_candidates = []
+            seen_keys = set()
+            seen_image_urls = set()
             
             for cand in raw_candidates:
-                # Relaxed deduplication: Use name + first 20 chars of description as key
-                # This ensures "John Smith (Actor)" and "John Smith (Doctor)" are kept separate
+                # Create dedup key from name + first 80 chars of description
                 name_key = cand['id'].lower().strip()
-                desc_key = cand.get('description', '')[:20].lower().strip()
+                desc_key = cand.get('description', '')[:80].lower().strip()
                 key = f"{name_key}::{desc_key}"
                 
-                if key in unique_candidates:
-                    existing = unique_candidates[key]
-                    # If new candidate has image and existing doesn't, replace it
-                    if cand.get('imageUrl') and not existing.get('imageUrl'):
-                        unique_candidates[key] = cand
-                else:
-                    unique_candidates[key] = cand
+                # Check if this image URL has already been used
+                img_url = cand.get('imageUrl')
+                
+                # Skip if duplicate key OR duplicate image URL
+                if key in seen_keys:
+                    continue
+                if img_url and img_url in seen_image_urls:
+                    continue
+                
+                # Add to results
+                unique_candidates.append(cand)
+                seen_keys.add(key)
+                if img_url:
+                    seen_image_urls.add(img_url)
             
             # Convert back to list and limit
-            candidates = list(unique_candidates.values())
-            return candidates[:30]
+            candidates = unique_candidates
+            return candidates
             
         except Exception as e:
             logger.error(f"Error fetching from SerpApi: {str(e)}", exc_info=True)

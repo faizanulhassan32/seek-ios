@@ -130,15 +130,10 @@ def get_candidates():
                     pass
                 return candidate
 
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                # Process top 5 candidates
-                top_candidates = candidates[:5]
-                remaining_candidates = candidates[5:]
-                
-                futures = [executor.submit(fetch_image, c) for c in top_candidates]
-                hydrated_top = [f.result() for f in futures]
-                
-                candidates = hydrated_top + remaining_candidates
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                # Process all candidates
+                futures = [executor.submit(fetch_image, c) for c in candidates]
+                candidates = [f.result() for f in futures]
         else:
             logger.info("PDL Search returned no candidates, falling back to SerpApi")
             
@@ -263,19 +258,40 @@ def get_candidates_ranked():
                     image_url = serpapi_service.fetch_image_url(" ".join(query_bits))
                     if image_url:
                         candidate['imageUrl'] = image_url
-                        logger.info(f"Fetched image for '{candidate.get('name')}': {image_url}")
-                    else:
-                        logger.info(f"No image found for '{candidate.get('name')}'")
                 except Exception as e:
                     logger.warning(f"Image fetch failed for {candidate.get('name')}: {e}")
                 return candidate
 
-            top = candidates[:5]
-            rest = candidates[5:]
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                top = [f.result() for f in [executor.submit(fetch_image, c) for c in top]]
-            candidates = top + rest
-            logger.info(f"Image hydration complete. Top {len(top)} processed.\n")
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [executor.submit(fetch_image, c) for c in candidates]
+                candidates = [f.result() for f in futures]
+            logger.info(f"Image hydration complete. {len(candidates)} candidates processed.\n")
+            
+            # Deduplicate by image URL after hydration
+            unique_by_image = []
+            seen_images = set()
+            seen_names = set()
+            
+            for cand in candidates:
+                img_url = cand.get('imageUrl')
+                name_lower = cand.get('name', '').lower().strip()
+                
+                # Skip if duplicate image URL or duplicate name (case-insensitive)
+                if img_url and img_url in seen_images:
+                    logger.debug(f"Skipping duplicate image: {cand.get('name')}")
+                    continue
+                if name_lower and name_lower in seen_names:
+                    logger.debug(f"Skipping duplicate name: {cand.get('name')}")
+                    continue
+                    
+                unique_by_image.append(cand)
+                if img_url:
+                    seen_images.add(img_url)
+                if name_lower:
+                    seen_names.add(name_lower)
+            
+            candidates = unique_by_image
+            logger.info(f"After image/name deduplication: {len(candidates)} unique candidates remain.\n")
 
         if not candidates:
             return jsonify({'query': base_query, 'candidates': []}), 200
