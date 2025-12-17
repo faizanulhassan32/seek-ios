@@ -2,8 +2,8 @@ services:
   - type: web
     name: person-search-backend
     runtime: python
-    buildCommand: cd backend && pip install -r requirements.txt
-    startCommand: cd backend && gunicorn --timeout 120 --workers 2 --threads 4 --worker-class gthread app:app
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --timeout 120 --workers 2 --threads 4 --worker-class gthread app:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.0
@@ -11,19 +11,27 @@ services:
         value: production
       - key: PORT
         value: 10000
-      - key: OPENAI_API_KEY
-        sync: false
       - key: APIFY_API_KEY
         sync: false
-      - key: SUPABASE_URL
+      - key: SERPAPI_KEY
         sync: false
-      - key: SUPABASE_KEY
+      - key: SUPERWALL_API_KEY
         sync: false
       - key: GOOGLE_API_KEY
         sync: false
       - key: GOOGLE_CX
         sync: false
-      - key: SERPAPI_KEY
+      - key: OPENAI_API_KEY
         sync: false
-      - key: SUPERWALL_API_KEY
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
         sync: false

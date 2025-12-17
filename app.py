@@ -32,6 +32,19 @@ app.register_blueprint(auth_bp)
 @app.route('/health', methods=['GET'])
 def health_check():
     return {'status': 'healthy'}, 200
+    
+# Temporary route map inspector to debug routing in deployed envs
+@app.route('/debug/routes', methods=['GET'])
+def debug_routes():
+    routes = []
+    for rule in app.url_map.iter_rules():
+        routes.append({
+            'rule': str(rule),
+            'endpoint': rule.endpoint,
+            'methods': sorted(list(rule.methods - {'HEAD', 'OPTIONS'}))
+        })
+    return {'routes': routes}, 200
+
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
