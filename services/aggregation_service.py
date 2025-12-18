@@ -4,6 +4,7 @@ import re
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from services.image_proxy_service import get_image_proxy_service
+from services.rekognition_service import get_rekognition_service
 
 logger = setup_logger('aggregation_service')
 
@@ -12,6 +13,7 @@ class AggregationService:
 
     def __init__(self):
         self.image_proxy = get_image_proxy_service()
+        self.rekognition = get_rekognition_service()
 
     def aggregate_person_data(
         self,
@@ -136,20 +138,20 @@ class AggregationService:
             for photo in photos:
                 original_url = photo.get('url')
                 if original_url and original_url in proxy_map:
+                    # Successfully proxied - use new URL
                     photo['url'] = proxy_map[original_url]
                     successful_photos.append(photo)
-                elif original_url:
-                    # Proxy failed or didn't return a result, but we keep the original URL
-                    # This is important for "candidate_selection" images which we know are likely valid
-                    # even if our backend couldn't reach them (e.g. 403 to servers but not clients)
+                elif original_url and photo.get('source') == 'candidate_selection':
+                    # Keep candidate selection images even if proxy fails (client can access them)
                     successful_photos.append(photo)
-                    logger.debug(f"Proxy failed for {original_url}, keeping original")
+                    logger.debug(f"Keeping candidate_selection image despite proxy failure: {original_url}")
                 else:
-                    # No URL at all
+                    # Proxy failed and it's not a candidate selection image - remove it
                     failed_count += 1
+                    logger.debug(f"Removing photo due to proxy failure: {original_url}")
 
             if failed_count > 0:
-                logger.info(f"Filtered out {failed_count} photos with empty URLs")
+                logger.info(f"Filtered out {failed_count} photos due to proxy failures or empty URLs")
 
             photos = successful_photos
 
@@ -334,18 +336,27 @@ class AggregationService:
         }
 
     def _extract_instagram_photos(self, data: Dict) -> List[Dict]:
-        """Extract photos from Instagram data"""
+        """Extract photos from Instagram data - only photos with faces"""
         photos = []
         posts = data.get('latestPosts', []) if data else []
 
-        for post in posts[:10]:  # Limit to 10 photos
-            if post.get('displayUrl'):
-                photos.append({
-                    'url': post.get('displayUrl'),
-                    'source': 'instagram',
-                    'caption': post.get('caption', '')[:200],
-                    'likes': post.get('likesCount', 0)
-                })
+        for post in posts[:15]:  # Check more posts to get 10 with faces
+            url = post.get('displayUrl')
+            if url:
+                # Validate that image contains a face
+                has_face = self.rekognition.detect_faces_in_url(url)
+                if has_face:
+                    photos.append({
+                        'url': url,
+                        'source': 'instagram',
+                        'caption': post.get('caption', '')[:200],
+                        'likes': post.get('likesCount', 0)
+                    })
+                    
+                    if len(photos) >= 10:  # Stop once we have 10 face photos
+                        break
+                else:
+                    logger.debug(f"Skipping Instagram photo without face: {url}")
 
         return photos
 
@@ -372,19 +383,29 @@ class AggregationService:
         }
 
     def _extract_twitter_photos(self, data: List[Dict]) -> List[Dict]:
-        """Extract photos from Twitter data"""
+        """Extract photos from Twitter data - only photos with faces"""
         photos = []
 
-        for tweet in data[:10]:  # Limit to 10 photos
+        for tweet in data[:15]:  # Check more tweets to get 10 with faces
             media = tweet.get('entities', {}).get('media', [])
             for m in media:
                 if m.get('type') == 'photo' and m.get('media_url_https'):
-                    photos.append({
-                        'url': m.get('media_url_https'),
-                        'source': 'twitter',
-                        'caption': tweet.get('full_text', '')[:200],
-                        'likes': tweet.get('favorite_count', 0)
-                    })
+                    url = m.get('media_url_https')
+                    
+                    # Validate that image contains a face
+                    has_face = self.rekognition.detect_faces_in_url(url)
+                    if has_face:
+                        photos.append({
+                            'url': url,
+                            'source': 'twitter',
+                            'caption': tweet.get('full_text', '')[:200],
+                            'likes': tweet.get('favorite_count', 0)
+                        })
+                        
+                        if len(photos) >= 10:  # Stop once we have 10 face photos
+                            return photos
+                    else:
+                        logger.debug(f"Skipping Twitter photo without face: {url}")
 
         return photos
 

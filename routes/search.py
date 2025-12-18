@@ -67,7 +67,7 @@ def validate_image_url(url: str) -> bool:
 
 
 def fetch_google_image_urls(name: str) -> List[Dict]:
-    """Fetch up to 5 Google Custom Search image URLs for a name."""
+    """Fetch up to 5 Google Custom Search image URLs for a name - portrait/face images only."""
     api_key = os.getenv('GOOGLE_API_KEY')
     cx = os.getenv('GOOGLE_CX')
 
@@ -75,14 +75,19 @@ def fetch_google_image_urls(name: str) -> List[Dict]:
         logger.warning("Google API credentials not set; skipping image fetch")
         return []
 
+    # Add "portrait" and "profile" keywords to focus on person photos
+    search_query = f"{name} portrait OR profile OR headshot person"
+    
     params = {
-        'q': name,
+        'q': search_query,
         'cx': cx,
         'key': api_key,
         'searchType': 'image',
-        'num': 5,
-        'imgType': 'face',
-        'safe': 'high'
+        'num': 10,  # Request more to filter down
+        'imgType': 'face',  # Google's face detection
+        'safe': 'high',
+        'imgSize': 'medium',  # Profile pics are usually medium size
+        'fileType': 'jpg,png'  # Standard formats
     }
 
     try:
@@ -95,8 +100,15 @@ def fetch_google_image_urls(name: str) -> List[Dict]:
         items = data.get('items', []) if isinstance(data, dict) else []
 
         photos = []
-        for item in items[:5]:
+        for item in items:
             url = item.get('link')
+            title = item.get('title', '').lower()
+            
+            # Skip if title suggests non-person image
+            skip_keywords = ['logo', 'icon', 'wallpaper', 'background', 'landscape', 'building', 'product']
+            if any(keyword in title for keyword in skip_keywords):
+                continue
+            
             if url and validate_image_url(url):
                 photos.append({
                     'url': url,
@@ -104,9 +116,12 @@ def fetch_google_image_urls(name: str) -> List[Dict]:
                     'likes': None,
                     'source': 'google'
                 })
+                
+            if len(photos) >= 5:  # Only need 5 good ones
+                break
 
         if photos:
-            logger.info(f"Fetched and validated {len(photos)} Google images for {name}")
+            logger.info(f"Fetched and validated {len(photos)} Google portrait images for {name}")
 
         return photos
 
@@ -279,12 +294,12 @@ def search_person():
             logger.info("Key social profiles missing. Attempting fallback search via Apify...\n")
             fallback_links = apify_service.find_social_links(query)
             
-            # Merge fallback links into identifiers
+            # Merge fallback links into identifiers for scraping attempts
             if fallback_links:
-                logger.info(f"Merging fallback links: {fallback_links}\n")
+                logger.info(f"Found social links: {fallback_links}\n")
                 identifiers.update(fallback_links)
                 
-                # Also update structured_info so it's reflected in the final response
+                # Add validated profile URLs to structured_info for final response
                 for platform, handle_or_url in fallback_links.items():
                     # Check if already exists to avoid duplicates
                     exists = False
@@ -294,10 +309,29 @@ def search_person():
                             break
                     
                     if not exists:
+                        # Build proper profile URL
+                        if platform == 'instagram':
+                            profile_url = f"https://www.instagram.com/{handle_or_url}"
+                            username = handle_or_url
+                        elif platform == 'twitter':
+                            profile_url = f"https://twitter.com/{handle_or_url}"
+                            username = handle_or_url
+                        elif platform == 'tiktok':
+                            profile_url = f"https://www.tiktok.com/@{handle_or_url}"
+                            username = handle_or_url
+                        elif platform == 'linkedin':
+                            profile_url = handle_or_url  # Already full URL
+                            username = ''
+                        elif platform in ['facebook', 'youtube']:
+                            profile_url = handle_or_url  # Already full URL
+                            username = ''
+                        else:
+                            continue
+                        
                         structured_info.setdefault('social_profiles', []).append({
                             'platform': platform,
-                            'username': handle_or_url if platform in ['instagram', 'twitter', 'tiktok'] else '',
-                            'url': handle_or_url if 'http' in handle_or_url else f"https://{platform}.com/{handle_or_url}"
+                            'username': username,
+                            'url': profile_url
                         })
 
         # Step 4: Execute Parallel Tasks (Social Scraping + Answer Generation)

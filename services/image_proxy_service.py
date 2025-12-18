@@ -90,12 +90,18 @@ class ImageProxyService:
                         return None
 
                     try:
-                        self.supabase.upload_file(
+                        upload_result = self.supabase.upload_file(
                             bucket=self.bucket_name,
                             path=storage_path,
                             file_data=response.content,
                             content_type=content_type
                         )
+                        
+                        # Check if upload actually succeeded
+                        if upload_result is None:
+                            logger.error(f"Upload failed for {url}: upload_file returned None")
+                            return None
+                            
                         return self.supabase.get_public_url(self.bucket_name, storage_path)
                     except Exception as upload_error:
                         logger.error(f"Error uploading file to Supabase for {url}: {str(upload_error)}")

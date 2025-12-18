@@ -267,7 +267,7 @@ def get_candidates_ranked():
                 candidates = [f.result() for f in futures]
             logger.info(f"Image hydration complete. {len(candidates)} candidates processed.\n")
             
-            # Deduplicate by image URL after hydration
+            # Deduplicate by image URL and name after hydration
             unique_by_image = []
             seen_images = set()
             seen_names = set()
@@ -276,12 +276,18 @@ def get_candidates_ranked():
                 img_url = cand.get('imageUrl')
                 name_lower = cand.get('name', '').lower().strip()
                 
-                # Skip if duplicate image URL or duplicate name (case-insensitive)
+                # Skip if EITHER duplicate image URL OR duplicate name (case-insensitive)
+                is_duplicate = False
+                
                 if img_url and img_url in seen_images:
-                    logger.debug(f"Skipping duplicate image: {cand.get('name')}")
-                    continue
+                    logger.debug(f"Skipping duplicate image URL: {cand.get('name')} - {img_url}")
+                    is_duplicate = True
+                    
                 if name_lower and name_lower in seen_names:
                     logger.debug(f"Skipping duplicate name: {cand.get('name')}")
+                    is_duplicate = True
+                
+                if is_duplicate:
                     continue
                     
                 unique_by_image.append(cand)

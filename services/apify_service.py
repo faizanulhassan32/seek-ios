@@ -351,10 +351,8 @@ class ApifyService:
                 "maxPagesPerQuery": 1
             }
 
-            # Note: The input format for apify/google-search-scraper might vary.
-            # Checking documentation: usually "queries" is a string (one per line).
-
-            run = self.client.actor("apify/google-search-scraper").call(run_input=run_input, timeout_secs=20)
+            # Increased timeout to prevent timeouts
+            run = self.client.actor("apify/google-search-scraper").call(run_input=run_input, timeout_secs=30)
 
             found_links = {}
 
@@ -364,32 +362,56 @@ class ApifyService:
                     continue
                     
                 first_result = organic_results[0]
-                link = first_result.get('url')
+                link = first_result.get('url', '')
                 
-                if 'instagram.com' in link:
-                    parts = link.rstrip('/').split('/')
+                # Clean URL - remove query params and fragments
+                clean_link = link.split('?')[0].split('#')[0].rstrip('/')
+                
+                if 'instagram.com' in clean_link:
+                    parts = clean_link.split('/')
+                    # Extract username: instagram.com/username
                     if len(parts) > 3:
-                        found_links['instagram'] = parts[-1]
-                elif 'twitter.com' in link or 'x.com' in link:
-                    parts = link.rstrip('/').split('/')
+                        username = parts[-1]
+                        # Skip non-profile paths
+                        if username and not username.startswith(('p', 'reel', 'tv', 'explore', 'stories')):
+                            found_links['instagram'] = username
+                            
+                elif 'twitter.com' in clean_link or 'x.com' in clean_link:
+                    parts = clean_link.split('/')
+                    # Extract username: twitter.com/username
                     if len(parts) > 3:
-                        found_links['twitter'] = parts[-1]
-                elif 'linkedin.com' in link:
-                    found_links['linkedin'] = link
-                elif 'facebook.com' in link:
-                    found_links['facebook'] = link
-                elif 'youtube.com' in link:
-                    found_links['youtube'] = link
-                elif 'tiktok.com' in link:
-                    parts = link.rstrip('/').split('/')
-                    if len(parts) > 3 and parts[-1].startswith('@'):
-                        found_links['tiktok'] = parts[-1]
-                    else:
-                        found_links['tiktok'] = link
-                elif 'bumble.com' in link:
-                    found_links['bumble'] = link
-                elif 'tinder.com' in link:
-                    found_links['tinder'] = link
+                        username = parts[-1]
+                        # Skip system pages
+                        if username and username not in ['home', 'explore', 'notifications', 'messages', 'compose', 'i', 'search']:
+                            found_links['twitter'] = username
+                            
+                elif 'linkedin.com/in/' in clean_link:
+                    # Only accept /in/ profile URLs, not company or other pages
+                    found_links['linkedin'] = clean_link
+                    
+                elif 'facebook.com' in clean_link:
+                    # Extract profile ID or username
+                    parts = clean_link.split('/')
+                    if len(parts) > 3:
+                        identifier = parts[-1]
+                        # Skip non-profile pages
+                        if identifier and identifier not in ['pages', 'groups', 'events', 'marketplace', 'watch', 'gaming']:
+                            found_links['facebook'] = clean_link
+                            
+                elif 'youtube.com' in clean_link:
+                    # Only accept channel or user URLs, not video or watch pages
+                    if '/channel/' in clean_link or '/user/' in clean_link or '/@' in clean_link:
+                        found_links['youtube'] = clean_link
+                        
+                elif 'tiktok.com/@' in clean_link:
+                    # Extract username from @username format
+                    parts = clean_link.split('/')
+                    for part in parts:
+                        if part.startswith('@'):
+                            username = part[1:]  # Remove @ prefix
+                            if username:
+                                found_links['tiktok'] = username
+                            break
                     
             logger.info(f"Fallback search found: {found_links}")
             return found_links

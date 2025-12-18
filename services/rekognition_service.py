@@ -108,6 +108,50 @@ class RekognitionService:
             logger.warning(f"Rekognition compare_faces failed: {e}")
             return 0.0
 
+    def detect_faces_in_url(self, image_url: str) -> bool:
+        """
+        Check if an image contains at least one face.
+        
+        Args:
+            image_url: URL of the image to check
+            
+        Returns:
+            True if at least one face is detected, False otherwise
+        """
+        if not self.client:
+            logger.warning("Rekognition client not initialized, skipping face detection")
+            return True  # Default to True if service unavailable
+            
+        try:
+            # Download and normalize image
+            raw_image = self._download_image(image_url)
+            if not raw_image:
+                return False
+                
+            norm_image = self._normalize_image_bytes(raw_image)
+            if not norm_image:
+                return False
+            
+            # Detect faces
+            response = self.client.detect_faces(
+                Image={'Bytes': norm_image},
+                Attributes=['DEFAULT']
+            )
+            
+            faces = response.get('FaceDetails', [])
+            has_face = len(faces) > 0
+            
+            if has_face:
+                logger.debug(f"Face detected in image: {image_url}")
+            else:
+                logger.debug(f"No face detected in image: {image_url}")
+                
+            return has_face
+            
+        except Exception as e:
+            logger.warning(f"Face detection failed for {image_url}: {e}")
+            return False  # Exclude images that fail detection
+
 
 _rekognition_service = None
 
