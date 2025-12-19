@@ -336,27 +336,19 @@ class AggregationService:
         }
 
     def _extract_instagram_photos(self, data: Dict) -> List[Dict]:
-        """Extract photos from Instagram data - only photos with faces"""
+        """Extract photos from Instagram data"""
         photos = []
         posts = data.get('latestPosts', []) if data else []
 
-        for post in posts[:15]:  # Check more posts to get 10 with faces
+        for post in posts[:10]:  # Get up to 10 photos
             url = post.get('displayUrl')
             if url:
-                # Validate that image contains a face
-                has_face = self.rekognition.detect_faces_in_url(url)
-                if has_face:
-                    photos.append({
-                        'url': url,
-                        'source': 'instagram',
-                        'caption': post.get('caption', '')[:200],
-                        'likes': post.get('likesCount', 0)
-                    })
-                    
-                    if len(photos) >= 10:  # Stop once we have 10 face photos
-                        break
-                else:
-                    logger.debug(f"Skipping Instagram photo without face: {url}")
+                photos.append({
+                    'url': url,
+                    'source': 'instagram',
+                    'caption': post.get('caption', '')[:200],
+                    'likes': post.get('likesCount', 0)
+                })
 
         return photos
 
@@ -383,29 +375,23 @@ class AggregationService:
         }
 
     def _extract_twitter_photos(self, data: List[Dict]) -> List[Dict]:
-        """Extract photos from Twitter data - only photos with faces"""
+        """Extract photos from Twitter data"""
         photos = []
 
-        for tweet in data[:15]:  # Check more tweets to get 10 with faces
+        for tweet in data[:10]:  # Get up to 10 tweets
             media = tweet.get('entities', {}).get('media', [])
             for m in media:
                 if m.get('type') == 'photo' and m.get('media_url_https'):
                     url = m.get('media_url_https')
+                    photos.append({
+                        'url': url,
+                        'source': 'twitter',
+                        'caption': tweet.get('full_text', '')[:200],
+                        'likes': tweet.get('favorite_count', 0)
+                    })
                     
-                    # Validate that image contains a face
-                    has_face = self.rekognition.detect_faces_in_url(url)
-                    if has_face:
-                        photos.append({
-                            'url': url,
-                            'source': 'twitter',
-                            'caption': tweet.get('full_text', '')[:200],
-                            'likes': tweet.get('favorite_count', 0)
-                        })
-                        
-                        if len(photos) >= 10:  # Stop once we have 10 face photos
-                            return photos
-                    else:
-                        logger.debug(f"Skipping Twitter photo without face: {url}")
+                    if len(photos) >= 10:
+                        return photos
 
         return photos
 

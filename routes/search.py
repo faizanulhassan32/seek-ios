@@ -66,6 +66,42 @@ def validate_image_url(url: str) -> bool:
         return False
 
 
+def validate_social_url(url: str, platform: str) -> bool:
+    """
+    Validate that a social media URL actually exists (returns 200).
+    
+    Args:
+        url: Social media profile URL to validate
+        platform: Platform name (instagram, twitter, linkedin, etc.)
+        
+    Returns:
+        True if URL is accessible (200 status), False otherwise
+    """
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        
+        response = requests.head(url, headers=headers, allow_redirects=True, timeout=8)
+        
+        # 200 = OK, 302/301 = Redirect (common for social media)
+        if response.status_code in [200, 301, 302]:
+            logger.debug(f"✅ Valid {platform} URL: {url}")
+            return True
+        else:
+            logger.debug(f"❌ Invalid {platform} URL (status {response.status_code}): {url}")
+            return False
+            
+    except requests.RequestException as e:
+        logger.debug(f"❌ Invalid {platform} URL ({type(e).__name__}): {url}")
+        return False
+    except Exception as e:
+        logger.debug(f"❌ Validation error for {platform} URL: {str(e)}")
+        return False
+
+
 def fetch_google_image_urls(name: str) -> List[Dict]:
     """Fetch up to 5 Google Custom Search image URLs for a name - portrait/face images only."""
     api_key = os.getenv('GOOGLE_API_KEY')
@@ -328,11 +364,15 @@ def search_person():
                         else:
                             continue
                         
-                        structured_info.setdefault('social_profiles', []).append({
-                            'platform': platform,
-                            'username': username,
-                            'url': profile_url
-                        })
+                        # Validate URL before adding
+                        if validate_social_url(profile_url, platform):
+                            structured_info.setdefault('social_profiles', []).append({
+                                'platform': platform,
+                                'username': username,
+                                'url': profile_url
+                            })
+                        else:
+                            logger.info(f"Skipping invalid {platform} URL: {profile_url}")
 
         # Step 4: Execute Parallel Tasks (Social Scraping + Answer Generation)
         
