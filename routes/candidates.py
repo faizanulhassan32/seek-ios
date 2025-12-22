@@ -10,6 +10,7 @@ from services.serpapi_service import get_serpapi_service
 from services.rekognition_service import get_rekognition_service
 from db.supabase_client import get_supabase_client
 from utils.logger import setup_logger
+from utils.image_utils import validate_image_url
 
 logger = setup_logger('candidates_route')
 
@@ -256,7 +257,7 @@ def get_candidates_ranked():
                         company_part = desc.split(' at ')[1].split(' • ')[0]
                         query_bits.append(company_part)
                     image_url = serpapi_service.fetch_image_url(" ".join(query_bits))
-                    if image_url:
+                    if image_url and validate_image_url(image_url):
                         candidate['imageUrl'] = image_url
                 except Exception as e:
                     logger.warning(f"Image fetch failed for {candidate.get('name')}: {e}")

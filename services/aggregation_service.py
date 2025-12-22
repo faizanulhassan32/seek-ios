@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional
 from utils.logger import setup_logger
+from utils.image_utils import validate_image_url
 import re
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -90,11 +91,17 @@ class AggregationService:
 
             if source == 'instagram':
                 social_profiles.append(self._extract_instagram_profile(data))
-                photos.extend(self._extract_instagram_photos(data))
+                instagram_photos = self._extract_instagram_photos(data)
+                # Validate Instagram photos
+                instagram_photos = [p for p in instagram_photos if validate_image_url(p.get('url'))]
+                photos.extend(instagram_photos)
 
             elif source == 'twitter':
                 social_profiles.append(self._extract_twitter_profile(data))
-                photos.extend(self._extract_twitter_photos(data))
+                twitter_photos = self._extract_twitter_photos(data)
+                # Validate Twitter photos
+                twitter_photos = [p for p in twitter_photos if validate_image_url(p.get('url'))]
+                photos.extend(twitter_photos)
 
             elif source == 'linkedin':
                 social_profiles.append(self._extract_linkedin_profile(data))
@@ -110,6 +117,30 @@ class AggregationService:
             logger.info(f"Phase 2: Verifying {len(photos)} photos against reference image\n")
             photos = self._verify_photos_with_reference(photos, reference_photo)
             logger.info(f"Phase 2: {len(photos)} photos verified successfully\n")
+
+        # --- FACE DETECTION FILTER ---
+        # Filter out images without faces before proxying to save bandwidth
+        if photos:
+            logger.info(f"Filtering photos with face detection ({len(photos)} photos)...")
+            rekognition = self.rekognition
+            photos_with_faces = []
+            
+            for photo in photos:
+                url = photo.get('url')
+                # Skip face detection for candidate selection images
+                if photo.get('source') == 'candidate_selection':
+                    photos_with_faces.append(photo)
+                    continue
+                    
+                if url and rekognition.detect_faces_in_url(url):
+                    photos_with_faces.append(photo)
+                else:
+                    logger.debug(f"Filtered out photo without face: {url}")
+            
+            filtered_count = len(photos) - len(photos_with_faces)
+            if filtered_count > 0:
+                logger.info(f"Filtered out {filtered_count} photos without faces")
+            photos = photos_with_faces
 
         # --- PROXY IMAGES ---
         # Collect all URLs that need proxying

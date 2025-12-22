@@ -31,7 +31,22 @@ class RekognitionService:
         Returns normalized bytes or None if not convertible.
         """
         try:
+            # Validate input data
+            if not data or len(data) == 0:
+                logger.warning("Empty image data provided")
+                return None
+            
             with Image.open(io.BytesIO(data)) as img:
+                # Verify image is valid
+                img.verify()
+            
+            # Reopen after verify (verify closes the file)
+            with Image.open(io.BytesIO(data)) as img:
+                # Skip corrupted or invalid images
+                if img.size[0] == 0 or img.size[1] == 0:
+                    logger.warning("Image has zero dimensions")
+                    return None
+                
                 # Convert to RGB (strip alpha) for JPEG compatibility
                 if img.mode not in ("RGB", "L"):
                     img = img.convert("RGB")
@@ -41,7 +56,7 @@ class RekognitionService:
                 if max_side > 4096:
                     scale = 4096 / float(max_side)
                     new_size = (int(img.size[0] * scale), int(img.size[1] * scale))
-                    img = img.resize(new_size)
+                    img = img.resize(new_size, Image.Resampling.LANCZOS)
 
                 # Encode as JPEG to ensure compatibility and reduce size
                 buf = io.BytesIO()
@@ -50,10 +65,20 @@ class RekognitionService:
 
                 # If still very large (> 5MB), downscale further
                 if len(normalized) > 5 * 1024 * 1024:
-                    img = img.resize((int(img.size[0] * 0.75), int(img.size[1] * 0.75)))
+                    img = img.resize((int(img.size[0] * 0.75), int(img.size[1] * 0.75)), Image.Resampling.LANCZOS)
                     buf = io.BytesIO()
                     img.save(buf, format="JPEG", quality=85, optimize=True)
                     normalized = buf.getvalue()
+                
+                # Final validation: ensure we have valid JPEG data
+                if len(normalized) == 0:
+                    logger.warning("Normalized image is empty")
+                    return None
+                
+                # AWS Rekognition requires images to be between 1KB and 15MB
+                if len(normalized) < 1024:
+                    logger.warning(f"Image too small after normalization: {len(normalized)} bytes")
+                    return None
 
                 return normalized
         except Exception as e:

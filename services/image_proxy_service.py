@@ -2,10 +2,12 @@ import requests
 import hashlib
 import os
 import time
+import io
 from typing import Optional
 from urllib.parse import urlparse
 from db.supabase_client import get_supabase_client
 from utils.logger import setup_logger
+from PIL import Image
 
 logger = setup_logger('image_proxy_service')
 
@@ -87,6 +89,26 @@ class ImageProxyService:
                     # 3. Validate actual content size
                     if len(response.content) < 1024:
                         logger.warning(f"Image content too small ({len(response.content)} bytes): {url}")
+                        return None
+
+                    # 4. Validate image resolution and aspect ratio
+                    try:
+                        img = Image.open(io.BytesIO(response.content))
+                        
+                        # Resolution check - minimum 300x300px for face recognition
+                        if img.width < 300 or img.height < 300:
+                            logger.warning(f"Image resolution too small ({img.width}x{img.height}): {url}")
+                            return None
+                        
+                        # Aspect ratio check - reject extreme ratios (banners, headers)
+                        aspect_ratio = img.width / img.height
+                        if aspect_ratio < 0.7 or aspect_ratio > 1.4:
+                            logger.warning(f"Image aspect ratio invalid ({aspect_ratio:.2f}): {url}")
+                            return None
+                            
+                        logger.debug(f"Image validation passed: {img.width}x{img.height}, aspect ratio: {aspect_ratio:.2f}")
+                    except Exception as img_error:
+                        logger.warning(f"Failed to validate image dimensions for {url}: {img_error}")
                         return None
 
                     try:
