@@ -53,9 +53,7 @@ class SerpApiService:
                     response = requests.get(self.BASE_URL, params=params)
                     response.raise_for_status()
                     data = response.json()
-                    
-                    logger.info(f"Page {page+1}: {list(data.keys())}")
-                    
+                                        
                     # 1. Check Knowledge Graph (High confidence) - first page only
                     if page == 0 and "knowledge_graph" in data:
                         kg = data["knowledge_graph"]

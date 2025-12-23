@@ -51,33 +51,14 @@ class RekognitionService:
                 if img.mode not in ("RGB", "L"):
                     img = img.convert("RGB")
 
-                # Resize if too large (> 4096 px on either side)
-                max_side = max(img.size)
-                if max_side > 4096:
-                    scale = 4096 / float(max_side)
-                    new_size = (int(img.size[0] * scale), int(img.size[1] * scale))
-                    img = img.resize(new_size, Image.Resampling.LANCZOS)
-
-                # Encode as JPEG to ensure compatibility and reduce size
+                # Encode as JPEG to ensure compatibility
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=90, optimize=True)
                 normalized = buf.getvalue()
-
-                # If still very large (> 5MB), downscale further
-                if len(normalized) > 5 * 1024 * 1024:
-                    img = img.resize((int(img.size[0] * 0.75), int(img.size[1] * 0.75)), Image.Resampling.LANCZOS)
-                    buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=85, optimize=True)
-                    normalized = buf.getvalue()
                 
                 # Final validation: ensure we have valid JPEG data
                 if len(normalized) == 0:
                     logger.warning("Normalized image is empty")
-                    return None
-                
-                # AWS Rekognition requires images to be between 1KB and 15MB
-                if len(normalized) < 1024:
-                    logger.warning(f"Image too small after normalization: {len(normalized)} bytes")
                     return None
 
                 return normalized
@@ -97,6 +78,72 @@ class RekognitionService:
         except Exception as e:
             logger.warning(f"Failed to download image from {url}: {e}")
             return None
+
+    def validate_candidate_image(self, image_url: str) -> bool:
+        """
+        Validate that a candidate image is usable for face comparison.
+        
+        Checks:
+        1. Image can be downloaded
+        2. Content-Type is image/*
+        3. Image contains at least one face
+        
+        Args:
+            image_url: URL of the candidate image
+            
+        Returns:
+            True if image passes all validation checks, False otherwise
+        """
+        if not self.client:
+            logger.warning("Rekognition client not initialized, skipping validation")
+            return False
+        
+        if not image_url:
+            return False
+        
+        try:
+            # Step 1: Try to download the image
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            }
+            resp = requests.get(image_url, headers=headers, timeout=15, allow_redirects=True)
+            resp.raise_for_status()
+            
+            # Step 2: Check Content-Type
+            content_type = resp.headers.get('Content-Type', '').lower()
+            if not content_type.startswith('image/'):
+                logger.debug(f"{image_url} > Invalid content-type '{content_type}'")
+                return False
+            
+            image_bytes = resp.content
+            if not image_bytes or len(image_bytes) == 0:
+                logger.debug(f"{image_url} > Empty image data")
+                return False
+            
+            # Step 3: Normalize and check if valid image
+            normalized = self._normalize_image_bytes(image_bytes)
+            if not normalized:
+                logger.debug(f"{image_url} > Image normalization failed")
+                return False
+            
+            # Step 4: Detect faces
+            response = self.client.detect_faces(
+                Image={'Bytes': normalized},
+                Attributes=['DEFAULT']
+            )
+            
+            faces = response.get('FaceDetails', [])
+            if len(faces) == 0:
+                logger.debug(f"{image_url} > No face detected")
+                return False
+            
+            logger.debug(f"{image_url} > ✅ Validated ({len(faces)} face(s) detected)")
+            return True
+            
+        except Exception as e:
+            logger.debug(f"{image_url} > Validation failed: {e}")
+            return False
 
     def compare_faces_bytes(self, source_bytes: bytes, target_url: str) -> Optional[float]:
         """Compare a reference image (bytes) to a target image (URL). Returns similarity score or 0."""
@@ -167,14 +214,14 @@ class RekognitionService:
             has_face = len(faces) > 0
             
             if has_face:
-                logger.debug(f"Face detected in image: {image_url}")
+                logger.debug(f"{image_url} > Face detected ({len(faces)} face(s))")
             else:
-                logger.debug(f"No face detected in image: {image_url}")
+                logger.debug(f"{image_url} > No face detected")
                 
             return has_face
             
         except Exception as e:
-            logger.warning(f"Face detection failed for {image_url}: {e}")
+            logger.warning(f"{image_url} > Face detection failed: {e}")
             return False  # Exclude images that fail detection
 
 
