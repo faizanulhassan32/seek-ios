@@ -167,7 +167,6 @@ class SerpApiService:
                     if img_url:
                         images.append(img_url)
                 
-                logger.info(f"Found {len(images)} images for query: {query}")
                 return images
             
             return []

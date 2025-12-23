@@ -30,7 +30,7 @@ def fetch_multiple_images_with_dedup(candidates, serpapi_service, rekognition_se
     """
     Fetch multiple images per candidate and assign unique faces using face recognition
     """
-    logger.info(f"Fetching multiple images for {len(candidates)} candidates with face-based deduplication")
+    logger.info(f"Fetching multiple images for {len(candidates)} candidates with face-based deduplication\n")
     
     # Track face embeddings we've already assigned
     assigned_embeddings = []
@@ -66,14 +66,14 @@ def fetch_multiple_images_with_dedup(candidates, serpapi_service, rekognition_se
                     # This is a unique face!
                     candidate['imageUrl'] = img_url
                     assigned_embeddings.append(embedding)
-                    logger.info(f"  ✅ Assigned unique image to '{name}'")
+                    logger.info(f"  ✅ Assigned unique image to '{name}'\n")
                     break
                     
             except Exception as e:
                 continue
         
         if not candidate.get('imageUrl'):
-            logger.info(f"❌ Could not find unique face for '{name}'")
+            logger.info(f"❌ Could not find unique face for '{name}'\n")
     
     with_images = sum(1 for c in candidates if c.get('imageUrl'))
     logger.info(f"Face-based deduplication complete: {with_images}/{len(candidates)} candidates have unique images\n")

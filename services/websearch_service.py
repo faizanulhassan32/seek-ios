@@ -43,7 +43,7 @@ class WebSearchService:
             """
 
             response = self.anthropic_client.messages.create(
-                model="claude-sonnet-4-5",
+                model="claude-haiku-4-5",
                 max_tokens=4096,
                 temperature=0,
                 system=system_prompt,
@@ -150,7 +150,7 @@ class WebSearchService:
 
                 # Get final structured response
                 final_response = self.anthropic_client.messages.create(
-                    model="claude-sonnet-4-5",
+                    model="claude-haiku-4-5",
                     max_tokens=4096,
                     temperature=0,
                     system=system_prompt,
@@ -287,7 +287,7 @@ class WebSearchService:
             """
 
             response = self.anthropic_client.messages.create(
-                model="claude-sonnet-4-5",
+                model="claude-haiku-4-5",
                 max_tokens=2048,
                 temperature=0,
                 system=system_prompt,
@@ -371,145 +371,7 @@ class WebSearchService:
                 'photos': [],
                 'notable_mentions': []
             }
-
-
-    def find_candidates(self, query: str) -> List[Dict]:
-        """
-        Find potential person candidates based on a query using web search.
-        Returns a list of candidates with basic info.
-        """
-        logger.info(f"Finding candidates for query: {query}")
-
-        try:
-            system_prompt = """
-                You are a person search assistant. Use web search to find potential candidates matching the query.
             
-                After searching, return a JSON object with a key "candidates" containing a list of objects.
-                Each candidate object must have:
-                - id: A unique string identifier (can be the name)
-                - name: Full name (Cleaned: remove titles like "Dr." or prefixes like "20+ profiles")
-                - description: A concise summary in the format "Occupation • Location" (e.g. "Software Engineer • New York, NY" or "Actor • Los Angeles, CA").
-                - imageUrl: A URL to a profile photo if found (or null)
-
-                If no specific person is found, try to return the most likely best match.
-                If multiple people match (e.g. "Michael Jordan"), return the top 5 most relevant ones.
-            """
-
-            response = self.anthropic_client.messages.create(
-                model="claude-sonnet-4-5",
-                max_tokens=2048,
-                temperature=0,
-                system=system_prompt,
-                tools=[
-                    {
-                        "type": "web_search_20250305",
-                        "name": "web_search",
-                        "max_uses": 3
-                    },
-                    {
-                        "name": "provide_candidates",
-                        "description": "Provide a list of person candidates found from web search",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {
-                                "candidates": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "id": {"type": "string"},
-                                            "name": {"type": "string"},
-                                            "description": {"type": "string"},
-                                            "imageUrl": {"type": ["string", "null"]}
-                                        },
-                                        "required": ["id", "name", "description"]
-                                    }
-                                }
-                            },
-                            "required": ["candidates"]
-                        }
-                    }
-                ],
-                tool_choice={
-                    "type": "tool",
-                    "name": "provide_candidates"
-                },
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f'Find candidates for: "{query}"'
-                    }
-                ]
-            )
-
-            # Process response
-            result_text = ""
-            candidates = []
-            
-            for content_block in response.content:
-                if content_block.type == "text":
-                    result_text += content_block.text
-                elif content_block.type == "tool_use" and content_block.name == "provide_candidates":
-                    candidates = content_block.input.get("candidates", [])
-
-            # If Claude used tools, continue conversation
-            if response.stop_reason == "tool_use" and not candidates:
-                messages = [
-                    {
-                        "role": "user",
-                        "content": f'Find candidates for: "{query}"'
-                    },
-                    {
-                        "role": "assistant",
-                        "content": response.content
-                    }
-                ]
-
-                final_response = self.anthropic_client.messages.create(
-                    model="claude-sonnet-4-5",
-                    max_tokens=2048,
-                    temperature=0,
-                    system=system_prompt,
-                    tools=[{
-                        "name": "provide_candidates",
-                        "description": "Provide a list of person candidates found from web search",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {
-                                "candidates": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "id": {"type": "string"},
-                                            "name": {"type": "string"},
-                                            "description": {"type": "string"},
-                                            "imageUrl": {"type": ["string", "null"]}
-                                        },
-                                        "required": ["id", "name", "description"]
-                                    }
-                                }
-                            },
-                            "required": ["candidates"]
-                        }
-                    }],
-                    tool_choice={
-                        "type": "tool",
-                        "name": "provide_candidates"
-                    },
-                    messages=messages
-                )
-
-                for content_block in final_response.content:
-                    if content_block.type == "tool_use" and content_block.name == "provide_candidates":
-                        candidates = content_block.input.get("candidates", [])
-
-            return candidates
-
-        except Exception as e:
-            logger.error(f"Error finding candidates: {str(e)}")
-            return []
-
 
     def deduplicate_candidates(self, candidates: List[Dict]) -> List[Dict]:
         """
@@ -559,7 +421,7 @@ class WebSearchService:
             """
             
             response = self.anthropic_client.messages.create(
-                model="claude-sonnet-4-5",
+                model="claude-haiku-4-5",
                 max_tokens=4096,
                 temperature=0,
                 system=system_prompt,
@@ -645,7 +507,7 @@ class WebSearchService:
             """
 
             response = self.anthropic_client.messages.create(
-                model="claude-sonnet-4-5",
+                model="claude-haiku-4-5",
                 max_tokens=4096,
                 temperature=0,
                 system=system_prompt,
@@ -653,7 +515,7 @@ class WebSearchService:
                     {
                         "type": "web_search_20250305",
                         "name": "web_search",
-                        "max_uses": 10
+                        "max_uses": 5
                     },
                     {
                         "name": "provide_candidates",
@@ -707,7 +569,7 @@ class WebSearchService:
                 ]
 
                 final_response = self.anthropic_client.messages.create(
-                    model="claude-sonnet-4-5",
+                    model="claude-haiku-4-5",
                     max_tokens=4096,
                     temperature=0,
                     system=system_prompt,

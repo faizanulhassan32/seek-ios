@@ -64,7 +64,7 @@ class RekognitionService:
                 return normalized
         except Exception as e:
             logger.warning(f"Failed to normalize image: {e}")
-        return None
+            return None
 
     def _download_image(self, url: str) -> Optional[bytes]:
         try:
