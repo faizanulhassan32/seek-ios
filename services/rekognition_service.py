@@ -79,17 +79,19 @@ class RekognitionService:
             logger.warning(f"Failed to download image from {url}: {e}")
             return None
 
-    def validate_candidate_image(self, image_url: str) -> bool:
+    def validate_image(self, image_url: str) -> bool:
         """
-        Validate that a candidate image is usable for face comparison.
+        Validate that an image is usable for face comparison.
         
-        Checks:
+        Client Validation Criteria:
         1. Image can be downloaded
         2. Content-Type is image/*
-        3. Image contains at least one face
+        3. More than 0KB (non-empty)
+        4. Can be any dimensions
+        5. Contains at least one face
         
         Args:
-            image_url: URL of the candidate image
+            image_url: URL of the image to validate
             
         Returns:
             True if image passes all validation checks, False otherwise
@@ -145,8 +147,17 @@ class RekognitionService:
             logger.debug(f"{image_url} > Validation failed: {e}")
             return False
 
-    def compare_faces_bytes(self, source_bytes: bytes, target_url: str) -> Optional[float]:
-        """Compare a reference image (bytes) to a target image (URL). Returns similarity score or 0."""
+    def compare_faces_bytes(self, source_bytes: bytes, target_url: str, threshold: float = 70.0) -> Optional[float]:
+        """Compare a reference image (bytes) to a target image (URL). Returns similarity score or 0.
+        
+        Args:
+            source_bytes: Reference image as bytes
+            target_url: URL of target image to compare
+            threshold: Minimum similarity threshold (default 70%)
+            
+        Returns:
+            Similarity score as float, or 0.0 if no match
+        """
         if not self.client:
             return 0.0
         if not target_url:
@@ -169,7 +180,7 @@ class RekognitionService:
             response = self.client.compare_faces(
                 SourceImage={'Bytes': norm_source},
                 TargetImage={'Bytes': norm_target},
-                SimilarityThreshold=70,
+                SimilarityThreshold=threshold,
             )
             matches = response.get('FaceMatches') or []
             if not matches:

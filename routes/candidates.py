@@ -175,7 +175,7 @@ def get_candidates_ranked():
                 continue
             
             # Has image URL: validate it contains a face
-            if rekognition.validate_candidate_image(image_url):
+            if rekognition.validate_image(image_url):
                 logger.info(f"✅ '{cand.get('name')}' has valid face image")
                 cand['hasFaceImage'] = True
                 final_candidates.append(cand)
@@ -211,7 +211,7 @@ def get_candidates_ranked():
                 image_url = cand.get('imageUrl')
                 logger.info(f"Comparing '{cand.get('name')}': {image_url}")
                 try:
-                    similarity = rekognition.compare_faces_bytes(reference_bytes, image_url) or 0.0
+                    similarity = rekognition.compare_faces_bytes(reference_bytes, image_url, 70.0) or 0.0
                     logger.info(f"  -> Similarity: {similarity}%")
                 except Exception as e:
                     logger.warning(f"Comparison failed for '{cand.get('name')}': {e}")

@@ -112,35 +112,39 @@ class AggregationService:
         social_profiles = self._deduplicate_list(social_profiles, key='platform')
         photos = self._deduplicate_list(photos, key='url')
 
-        # Phase 2: Verify photos with reference image if provided
+        # --- VALIDATION CRITERIA ---
+        # 1. Downloadable, 2. Content-Type: image/*, 3. >0KB, 4. Any dimensions, 5. Face detection
+        if photos:
+            logger.info(f"Validating {len(photos)} photos...")
+            rekognition = self.rekognition
+            validated_photos = []
+            
+            for photo in photos:
+                url = photo.get('url')
+                # Skip validation for candidate selection images (already validated)
+                if photo.get('source') == 'candidate_selection':
+                    validated_photos.append(photo)
+                    continue
+                    
+                if url and rekognition.validate_image(url):
+                    validated_photos.append(photo)
+                else:
+                    logger.debug(f"Filtered out invalid photo: {url}")
+            
+            filtered_count = len(photos) - len(validated_photos)
+            if filtered_count > 0:
+                logger.info(f"Filtered out {filtered_count} photos that failed validation")
+            photos = validated_photos
+
+        # Phase 2: Face matching with reference image (conditional)
+        # Only perform face matching if reference photo is provided
+        # Otherwise, return all validated photos
         if reference_photo and photos:
             logger.info(f"Phase 2: Verifying {len(photos)} photos against reference image\n")
             photos = self._verify_photos_with_reference(photos, reference_photo)
             logger.info(f"Phase 2: {len(photos)} photos verified successfully\n")
-
-        # --- FACE DETECTION FILTER ---
-        # Filter out images without faces before proxying to save bandwidth
-        if photos:
-            logger.info(f"Filtering photos with face detection ({len(photos)} photos)...")
-            rekognition = self.rekognition
-            photos_with_faces = []
-            
-            for photo in photos:
-                url = photo.get('url')
-                # Skip face detection for candidate selection images
-                if photo.get('source') == 'candidate_selection':
-                    photos_with_faces.append(photo)
-                    continue
-                    
-                if url and rekognition.detect_faces_in_url(url):
-                    photos_with_faces.append(photo)
-                else:
-                    logger.debug(f"Filtered out photo without face: {url}")
-            
-            filtered_count = len(photos) - len(photos_with_faces)
-            if filtered_count > 0:
-                logger.info(f"Filtered out {filtered_count} photos without faces")
-            photos = photos_with_faces
+        elif not reference_photo and photos:
+            logger.info(f"No reference photo provided - returning all {len(photos)} validated photos\n")
 
         # --- PROXY IMAGES ---
         # Collect all URLs that need proxying
@@ -259,7 +263,7 @@ class AggregationService:
     def _verify_photos_with_reference(self, photos: List[Dict], reference_photo: str) -> List[Dict]:
         """
         Phase 2: Verify photos against a reference image using AWS Rekognition.
-        Filters photos to keep only those with >= 90% similarity to the reference.
+        Filters photos to keep only those with >= 70% similarity to the reference.
         
         Args:
             photos: List of photo dicts with 'url' field
@@ -283,7 +287,7 @@ class AggregationService:
                 return photos
             
             verified_photos = []
-            similarity_threshold = 90.0  # 90% confidence threshold
+            similarity_threshold = 70.0  # 70% confidence threshold
             
             for idx, photo in enumerate(photos):
                 photo_url = photo.get('url')
@@ -292,7 +296,7 @@ class AggregationService:
                     continue
                 
                 try:
-                    similarity = rekognition.compare_faces_bytes(reference_bytes, photo_url)
+                    similarity = rekognition.compare_faces_bytes(reference_bytes, photo_url, similarity_threshold)
                     
                     if similarity is None:
                         similarity = 0.0

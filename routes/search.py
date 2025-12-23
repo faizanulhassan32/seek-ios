@@ -4,9 +4,12 @@ import os
 import requests
 import base64
 import tempfile
+import json
+from datetime import datetime as dt
 from services.websearch_service import get_websearch_service
 from services.apify_service import get_apify_service
 from services.aggregation_service import get_aggregation_service
+from services.rekognition_service import get_rekognition_service
 from db.supabase_client import get_supabase_client
 from models.person import Person
 from utils.logger import setup_logger
@@ -14,6 +17,40 @@ from utils.logger import setup_logger
 logger = setup_logger('search_route')
 
 search_bp = Blueprint('search', __name__)
+
+# Create debug directory for step outputs
+# DEBUG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'debug_steps')
+# os.makedirs(DEBUG_DIR, exist_ok=True)
+
+# def save_step_output(step_number: int, step_name: str, data: any, query: str):
+#     """Save step output to a JSON file for debugging and cost savings."""
+#     try:
+#         # Create safe filename from query
+#         safe_query = ''.join(c if c.isalnum() else '_' for c in query)[:50]
+#         timestamp = dt.now().strftime('%Y%m%d_%H%M%S')
+#         filename = f"step{step_number}_{step_name}_{safe_query}_{timestamp}.json"
+#         filepath = os.path.join(DEBUG_DIR, filename)
+#         
+#         # Convert data to JSON-serializable format
+#         if hasattr(data, 'to_dict'):
+#             serializable_data = data.to_dict()
+#         elif hasattr(data, '__dict__'):
+#             serializable_data = data.__dict__
+#         else:
+#             serializable_data = data
+#         
+#         with open(filepath, 'w', encoding='utf-8') as f:
+#             json.dump({
+#                 'step': step_number,
+#                 'step_name': step_name,
+#                 'query': query,
+#                 'timestamp': timestamp,
+#                 'data': serializable_data
+#             }, f, indent=2, default=str)
+#         
+#         logger.info(f"💾 Saved step {step_number} output to: {filename}")
+#     except Exception as e:
+#         logger.warning(f"Failed to save step {step_number} output: {e}")
 
 
 def normalize_query(query: str) -> str:
@@ -29,41 +66,6 @@ def normalize_query(query: str) -> str:
     if normalized.startswith('@'):
         normalized = normalized[1:]
     return normalized
-
-
-def validate_image_url(url: str) -> bool:
-    """
-    Validate that an image URL returns a valid image.
-
-    Args:
-        url: Image URL to validate
-
-    Returns:
-        True if URL returns 200 status with image/* content-type, False otherwise
-    """
-    try:
-        response = requests.head(url, allow_redirects=True, timeout=5)
-
-        # Check status code
-        if response.status_code != 200:
-            logger.debug(f"Image validation failed: status {response.status_code} for {url}")
-            return False
-
-        # Check Content-Type header
-        content_type = response.headers.get('Content-Type', '').lower()
-        if not content_type.startswith('image/'):
-            logger.debug(f"Image validation failed: Content-Type '{content_type}' for {url}")
-            return False
-
-        logger.debug(f"Image validated successfully: {url}")
-        return True
-
-    except requests.RequestException as e:
-        logger.debug(f"Image validation failed: {type(e).__name__} for {url}")
-        return False
-    except Exception as e:
-        logger.debug(f"Image validation unexpected error: {str(e)} for {url}")
-        return False
 
 
 def validate_social_url(url: str, platform: str) -> bool:
@@ -135,6 +137,7 @@ def fetch_google_image_urls(name: str) -> List[Dict]:
         data = response.json()
         items = data.get('items', []) if isinstance(data, dict) else []
 
+        rekognition = get_rekognition_service()
         photos = []
         for item in items:
             url = item.get('link')
@@ -145,7 +148,8 @@ def fetch_google_image_urls(name: str) -> List[Dict]:
             if any(keyword in title for keyword in skip_keywords):
                 continue
             
-            if url and validate_image_url(url):
+            # Validate image contains a face using AWS Rekognition
+            if url and rekognition.validate_image(url):
                 photos.append({
                     'url': url,
                     'caption': item.get('title', ''),
@@ -187,7 +191,6 @@ def search_person():
         }
     """
     try:
-        # Validate request
         data = request.get_json()
         if not data or 'query' not in data:
             return jsonify({'error': 'Query parameter is required'}), 400
@@ -308,6 +311,7 @@ def search_person():
             # Step 1: Perform websearch (Legacy flow or direct search)
             logger.info("Step 1: Performing websearch...")
             websearch_result = websearch_service.search_person(query)
+            # save_step_output(1, 'websearch', websearch_result, query)
 
             # Step 2: Extract structured information from websearch
             logger.info("Step 2: Extracting structured information...")
@@ -317,11 +321,13 @@ def search_person():
                     query,
                     websearch_result.get('content', '')
                 )
+            # save_step_output(2, 'structured_info', structured_info, query)
 
         # Step 3: Identify social media handles
         logger.info("Step 3: Identifying social media handles...")
         identifiers = extract_social_identifiers(query, structured_info)
         logger.info(f"Identified social handles: {identifiers}\n")
+        # save_step_output(3, 'social_handles', identifiers, query)
 
         # Fallback: If key social profiles are missing, try to find them via Apify Google Search
         # We check for at least one major platform or if the list is empty
@@ -329,6 +335,7 @@ def search_person():
             
             logger.info("Key social profiles missing. Attempting fallback search via Apify...\n")
             fallback_links = apify_service.find_social_links(query)
+            # save_step_output(3.5, 'fallback_social_links', fallback_links, query)
             
             # Merge fallback links into identifiers for scraping attempts
             if fallback_links:
@@ -475,6 +482,15 @@ def search_person():
                 answer_generated_at = datetime.utcnow()
 
             logger.info("Parallel tasks completed.\n")
+            
+            # Save step 4 outputs
+            # save_step_output(4, 'apify_results', apify_results, query)
+            # save_step_output(4, 'answer_generation', {
+            #     'answer': generated_answer,
+            #     'related_questions': related_questions,
+            #     'answer_generated_at': answer_generated_at.isoformat() if answer_generated_at else None
+            # }, query)
+            # save_step_output(4, 'pdl_data', pdl_data, query)
 
 
         # Step 5: Aggregate all data
@@ -487,6 +503,7 @@ def search_person():
             pdl_data,
             reference_photo=reference_photo  # Pass reference photo for Phase 2 verification
         )
+        # save_step_output(5, 'aggregated_data', aggregated_data, query)
 
         # Step 5.5: Google image fallback (triggers when no photos or all proxying failed)
         existing_photos = aggregated_data.get("photos", [])
@@ -501,6 +518,7 @@ def search_person():
             else:
                 logger.warning("Google Images fallback also returned no photos\n")
                 aggregated_data["photos"] = []
+            # save_step_output(5.5, 'google_fallback', google_photos if google_photos else [], query)
 
         # Step 6: Create Person object
         logger.info("Step 6: Creating Person object...\n")
@@ -515,6 +533,7 @@ def search_person():
             related_questions=related_questions,
             answer_generated_at=answer_generated_at
         )
+        # save_step_output(6, 'person_object', person.to_dict(), query)
 
         # Step 7: Store in Supabase
         logger.info("Step 7: Storing results in database...\n")
@@ -526,6 +545,7 @@ def search_person():
 
         # Update person with ID from database
         person.id = stored_person['id']
+        # save_step_output(7, 'database_stored', stored_person, query)
 
         logger.info(f"Search completed successfully for query: {query}")
 
