@@ -83,13 +83,6 @@ class Chat:
             'messages': [msg.to_dict() for msg in self.messages]
         }
 
-    def get_messages_for_openai(self) -> List[Dict]:
-        """Get messages in OpenAI API format"""
-        return [
-            {'role': msg.role, 'content': msg.content}
-            for msg in self.messages
-        ]
-
     @staticmethod
     def from_dict(data: Dict) -> 'Chat':
         """Create Chat object from dictionary"""

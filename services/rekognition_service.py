@@ -1,7 +1,7 @@
 import os
 import io
 import requests
-from typing import Optional
+from typing import Optional, List
 from utils.logger import setup_logger
 import boto3
 from PIL import Image
@@ -235,6 +235,70 @@ class RekognitionService:
             logger.warning(f"{image_url} > Face detection failed: {e}")
             return False  # Exclude images that fail detection
 
+
+    def get_face_embedding(self, image_source) -> Optional[List[float]]:
+        """
+        Get face embedding vector from an image for similarity comparison.
+        Returns a unique vector representation of the face.
+        """
+        if not self.client:
+            return None
+            
+        try:
+            # Handle both URL and bytes
+            if isinstance(image_source, str):
+                raw_image = self._download_image(image_source)
+                if not raw_image:
+                    return None
+                image_bytes = raw_image
+            else:
+                image_bytes = image_source
+            
+            # Normalize image
+            norm_image = self._normalize_image_bytes(image_bytes)
+            if not norm_image:
+                return None
+            
+            # Detect faces and get details
+            result = self.client.detect_faces(
+                Image={'Bytes': norm_image},
+                Attributes=['DEFAULT']
+            )
+            
+            if not result.get('FaceDetails'):
+                return None
+            
+            # Use face bounding box and confidence as embedding
+            face = result['FaceDetails'][0]
+            bbox = face['BoundingBox']
+            
+            # Create a simple embedding from face characteristics
+            embedding = [
+                bbox['Left'],
+                bbox['Top'],
+                bbox['Width'],
+                bbox['Height'],
+                face.get('Confidence', 0) / 100.0
+            ]
+            
+            return embedding
+        except Exception as e:
+            logger.warning(f"Face embedding extraction failed: {e}")
+            return None
+
+
+    def are_faces_similar(self, embedding1: List[float], embedding2: List[float], threshold: float = 0.15) -> bool:
+        """
+        Check if two face embeddings are similar (likely same person).
+        Uses simple euclidean distance.
+        """
+        if not embedding1 or not embedding2:
+            return False
+        
+        # Calculate euclidean distance
+        distance = sum((a - b) ** 2 for a, b in zip(embedding1, embedding2)) ** 0.5
+        
+        return distance < threshold
 
 _rekognition_service = None
 

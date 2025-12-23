@@ -1,6 +1,6 @@
-from openai import OpenAI
 import os
 from typing import Dict, List
+from anthropic import Anthropic
 from utils.logger import setup_logger
 
 logger = setup_logger('followup_service')
@@ -9,10 +9,11 @@ class FollowUpService:
     """Service for generating fast, focused follow-up answers about persons"""
 
     def __init__(self):
-        api_key = os.getenv('OPENAI_API_KEY')
+        api_key = os.getenv('ANTHROPIC_API_KEY')
         if not api_key:
-            raise ValueError("OPENAI_API_KEY must be set")
-        self.client = OpenAI(api_key=api_key)
+            raise ValueError("ANTHROPIC_API_KEY must be set")
+        self.anthropic_client = Anthropic(api_key=api_key)
+
 
     def generate_followup_answer(self, person_data: Dict, question: str) -> Dict:
         """
@@ -38,29 +39,56 @@ class FollowUpService:
                 query, basic_info, social_profiles, notable_mentions, question
             )
 
-            # Generate concise answer using OpenAI
+            # Generate concise answer using Claude
             logger.info(f"Generating follow-up answer for: {question}")
 
-            input_prompt = f"""
-            You are a knowledgeable assistant that provides SHORT, CONCISE answers to specific questions about people. 
-            Keep answers to 2-3 sentences maximum. Be direct and factual. Start with the answer immediately without preamble.
-
-            Question: {question}
-
-            Context about {query}:
-            {context}
-
-            Provide a brief, direct answer.
+            system_prompt = f"""
+                You are a knowledgeable assistant that provides SHORT, CONCISE answers to specific questions about people. 
+                Keep answers to 2-3 sentences maximum. Be direct and factual. Start with the answer immediately without preamble.
             """
 
-            response = self.client.responses.create(
-                model="gpt-5-mini",
-                input=input_prompt,
-                reasoning={ "effort": "low" },
-                text={ "verbosity": "low" }
+            response = self.anthropic_client.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=1024,
+                temperature=0.3,
+                system=system_prompt,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"""
+                            Question: {question}
+
+                            Context about {query}:
+                            {context}
+
+                            Provide a brief, direct answer.
+                        """
+                    }
+                ],
+                tools=[{
+                    "name": "provide_followup_answer",
+                    "description": "Provide a concise follow-up answer to the user's question about the person",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "answer": {
+                                "type": "string",
+                                "description": "A brief, direct answer (2-3 sentences maximum)"
+                            }
+                        },
+                        "required": ["answer"]
+                    }
+                }],
+                tool_choice={
+                    "type": "tool",
+                    "name": "provide_followup_answer"
+                }
             )
 
-            answer = response.output_text.strip()
+            # Extract answer from tool use
+            tool_use_block = response.content[0]
+            answer = tool_use_block.input["answer"]
+            
             logger.info(f"Successfully generated follow-up answer")
 
             # Filter relevant photos (max 3)
@@ -88,14 +116,8 @@ class FollowUpService:
             logger.error(f"Error generating follow-up answer: {str(e)}", exc_info=True)
             raise
 
-    def _build_focused_context(
-        self,
-        query: str,
-        basic_info: Dict,
-        social_profiles: List[Dict],
-        notable_mentions: List[Dict],
-        question: str
-    ) -> str:
+
+    def _build_focused_context(self,query: str,basic_info: Dict,social_profiles: List[Dict],notable_mentions: List[Dict],question: str) -> str:
         """Build focused context relevant to the specific question"""
         context_parts = []
 
@@ -124,6 +146,7 @@ class FollowUpService:
 
         return '\n'.join(context_parts) if context_parts else f"Person: {query}"
 
+
     def _filter_relevant_photos(self, photos: List[Dict], question: str) -> List[Dict]:
         """Filter photos that might be relevant to the question"""
         if not photos:
@@ -133,13 +156,8 @@ class FollowUpService:
         # In future, could use semantic similarity
         return photos[:3]
 
-    def _filter_relevant_sources(
-        self,
-        raw_sources: List[Dict],
-        social_profiles: List[Dict],
-        notable_mentions: List[Dict],
-        question: str
-    ) -> List[Dict]:
+
+    def _filter_relevant_sources(self,raw_sources: List[Dict],social_profiles: List[Dict],notable_mentions: List[Dict],question: str) -> List[Dict]:
         """Filter sources that might be relevant to the question"""
         sources = []
 
@@ -165,34 +183,56 @@ class FollowUpService:
 
         return sources[:4]
 
-    def _generate_related_followups(
-        self,
-        query: str,
-        current_question: str,
-        basic_info: Dict
-    ) -> List[str]:
+
+    def _generate_related_followups(self,query: str,current_question: str,basic_info: Dict) -> List[str]:
         """Generate related follow-up questions based on current question"""
         try:
             occupation = basic_info.get('occupation', 'person')
 
-            input_prompt = f"""
-            You are an assistant that generates relevant follow-up questions. Generate questions users might ask next. 
-            Return only the questions, one per line, without numbering.
-
-            User just asked: '{current_question}' about {query} ({occupation}).
-
-            Generate 3-4 related follow-up questions they might ask next.
+            system_prompt = """
+                You are an assistant that generates relevant follow-up questions. Generate questions users might ask next.
             """
 
-            response = self.client.responses.create(
-                model="gpt-5-mini",
-                input=input_prompt,
-                reasoning={ "effort": "low" },
-                text={ "verbosity": "low" }
+            response = self.anthropic_client.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=1024,
+                temperature=0.7,
+                system=system_prompt,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"""
+                            User just asked: '{current_question}' about {query} ({occupation}).
+                            Generate 3-4 related follow-up questions they might ask next.
+                        """
+                    }
+                ],
+                tools=[{
+                    "name": "provide_followup_questions",
+                    "description": "Generate a list of relevant follow-up questions the user might ask next",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "questions": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Array of 3-4 follow-up questions without numbering"
+                            }
+                        },
+                        "required": ["questions"]
+                    }
+                }],
+                tool_choice={
+                    "type": "tool",
+                    "name": "provide_followup_questions"
+                }
             )
 
-            questions_text = response.output_text.strip()
-            questions = [q.strip() for q in questions_text.split('\n') if q.strip()]
+            # Extract questions from tool use
+            tool_use_block = response.content[0]
+            questions = tool_use_block.input["questions"]
 
             return questions[:4]
 

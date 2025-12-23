@@ -1,11 +1,13 @@
+import os
+import json
 from flask import Blueprint, request, jsonify
 from typing import Dict
-from openai import OpenAI
-import os
+
+from anthropic import Anthropic
+
 from db.supabase_client import get_supabase_client
 from models.chat import Chat, ChatMessage
 from utils.logger import setup_logger
-import json
 
 logger = setup_logger('chat_route')
 
@@ -45,7 +47,7 @@ def chat_with_person():
 
         # Initialize services
         supabase_client = get_supabase_client()
-        openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        anthropic_client = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
 
         # Retrieve person data from database
         logger.info("Retrieving person data from database...")
@@ -74,40 +76,55 @@ def chat_with_person():
         last_message = messages[-1]
         chat.add_message(role=last_message['role'], content=last_message['content'])
 
-        # Build messages for OpenAI
-        # Convert message history to a single prompt for responses API
-        prompt_parts = []
-        
-        # System prompt
-        system_prompt = f"""You are an AI assistant helping users understand information about a person.
+        # Build system prompt
+        system_prompt = f"""
+            You are an AI assistant helping users understand information about a person.
+            You have access to the following information about this person:
+            {context}
+            Use this information to answer the user's questions accurately. If the user asks about something not in the data, acknowledge that you don't have that information. Support follow-up queries like "show me only Instagram data" or "summarize their professional background".
+        """
 
-You have access to the following information about this person:
-
-{context}
-
-Use this information to answer the user's questions accurately. If the user asks about something not in the data, acknowledge that you don't have that information. Support follow-up queries like "show me only Instagram data" or "summarize their professional background"."""
-        prompt_parts.append(f"System: {system_prompt}")
-
-        # Chat history
+        # Build messages for Claude API
+        claude_messages = []
         for msg in chat.messages:
-            role = "User" if msg.role == "user" else "Assistant"
-            prompt_parts.append(f"{role}: {msg.content}")
+            claude_messages.append({
+                "role": msg.role,
+                "content": msg.content
+            })
 
-        # Current user message
-        prompt_parts.append(f"User: {last_message['content']}")
-        
-        input_prompt = "\n\n".join(prompt_parts)
-
-        # Call OpenAI
-        logger.info("Calling OpenAI for chat response...")
-        response = openai_client.responses.create(
-            model="gpt-5-mini",
-            input=input_prompt,
-            reasoning={ "effort": "low" },
-            text={ "verbosity": "low" }
+        # Call Claude API with tool
+        logger.info("Calling Claude for chat response...")
+        response = anthropic_client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=1024,
+            temperature=0.7,
+            system=system_prompt,
+            messages=claude_messages,
+            tools=[{
+                "name": "provide_answer",
+                "description": "Provide the answer to the user's question about the person",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {
+                            "type": "string",
+                            "description": "The AI's response to the user's question"
+                        }
+                    },
+                    "required": ["answer"]
+                }
+            }],
+            tool_choice={
+                "type": "tool",
+                "name": "provide_answer"
+            }
         )
 
-        ai_reply = response.output_text
+        logger.info("Claude response received")
+
+        # Extract AI reply from tool use
+        tool_use_block = response.content[0]
+        ai_reply = tool_use_block.input["answer"]
 
         # Add AI response to chat
         chat.add_message(role='assistant', content=ai_reply)
@@ -133,7 +150,6 @@ Use this information to answer the user's questions accurately. If the user asks
     except Exception as e:
         logger.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
         return jsonify({'error': 'Internal server error', 'details': str(e)}), 500
-
 
 def build_person_context(person_data: Dict) -> str:
     """

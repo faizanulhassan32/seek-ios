@@ -26,19 +26,59 @@ def _rank_by_score(candidates: List[Dict]) -> List[Dict]:
     return scored
 
 
-def fetch_image(candidate, serpapi_service):
-    try:
-        query_bits = [candidate.get('name', '')]
-        desc = candidate.get('description', '')
-        if ' at ' in desc:
-            company_part = desc.split(' at ')[1].split(' • ')[0]
-            query_bits.append(company_part)
-        image_url = serpapi_service.fetch_image_url(" ".join(query_bits))
-        if image_url and validate_image_url(image_url):
-            candidate['imageUrl'] = image_url
-    except Exception as e:
-        logger.warning(f"Image fetch failed for {candidate.get('name')}: {e}")
-    return candidate
+def fetch_multiple_images_with_dedup(candidates, serpapi_service, rekognition_service):
+    """
+    Fetch multiple images per candidate and assign unique faces using face recognition
+    """
+    logger.info(f"Fetching multiple images for {len(candidates)} candidates with face-based deduplication")
+    
+    # Track face embeddings we've already assigned
+    assigned_embeddings = []
+    
+    for candidate in candidates:
+        name = candidate.get('name', '')
+        candidate['imageUrl'] = None  # Reset
+        
+        # Fetch top 5 image results for this candidate (simple name query)
+        logger.info(f"Fetching images for: {name}")
+        image_urls = serpapi_service.fetch_multiple_images(name, count=5)
+        
+        if not image_urls:
+            continue
+        
+        # Try each image until we find a unique face
+        for img_url in image_urls:
+            try:
+                # Get face embedding from this image
+                embedding = rekognition_service.get_face_embedding(img_url)
+                
+                if not embedding:
+                    continue
+                
+                # Check if this face is similar to any we've already assigned
+                is_duplicate = False
+                for assigned_emb in assigned_embeddings:
+                    if rekognition_service.are_faces_similar(embedding, assigned_emb):
+                        is_duplicate = True
+                        break
+                
+                if not is_duplicate:
+                    # This is a unique face!
+                    candidate['imageUrl'] = img_url
+                    assigned_embeddings.append(embedding)
+                    logger.info(f"  ✅ Assigned unique image to '{name}'")
+                    break
+                    
+            except Exception as e:
+                continue
+        
+        if not candidate.get('imageUrl'):
+            logger.info(f"❌ Could not find unique face for '{name}'")
+    
+    with_images = sum(1 for c in candidates if c.get('imageUrl'))
+    logger.info(f"Face-based deduplication complete: {with_images}/{len(candidates)} candidates have unique images\n")
+    
+    return candidates
 
 
 @candidates_bp.route('/candidates/ranked', methods=['POST'])
@@ -105,46 +145,41 @@ def get_candidates_ranked():
 
         candidates = []
 
-        # Always use SerpAPI for ranked flow
-        serpapi_service = get_serpapi_service()
-        candidates = serpapi_service.fetch_candidates(refined_query) or []
-        logger.info(f"SerpAPI returned {len(candidates)} candidates\n")
+        websearch_service = get_websearch_service()
+        candidates = websearch_service.fetch_candidates_from_web(refined_query, max_candidates=6) or []
+        logger.info(f"Claude web search returned {len(candidates)} candidates\n")
 
         if not candidates:
-            return jsonify({'query': refined_query, 'candidates': [], 'message': 'No candidates found from SerpAPI'}), 200
+            return jsonify({'query': refined_query, 'candidates': [], 'message': 'No candidates found from Claude web search'}), 200
 
-        # Hydrate images for all candidates
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(fetch_image, c, serpapi_service) for c in candidates]
-            candidates = [f.result() for f in futures]
-        logger.info(f"Image hydration complete. {len(candidates)} candidates processed.\n")
-        
-        # # Deduplicate by image URL and name after hydration
-        # unique_by_image = []
-        # seen_images = set()
-        # seen_names = set()
-        
-        # for cand in candidates:
-        #     img_url = cand.get('imageUrl')
-        #     name_lower = cand.get('name', '').lower().strip()
+
+        # Fetch multiple images with face-based deduplication
+        serpapi_service = get_serpapi_service()
+        rekognition_service = get_rekognition_service()
+        candidates = fetch_multiple_images_with_dedup(candidates, serpapi_service, rekognition_service)
+
+        # Deduplicate by image URL - keep first occurrence of each unique image
+        unique_candidates = []
+        seen_images = set()
+        for cand in candidates:
+            img_url = cand.get('imageUrl')
             
-        #     # Skip if EITHER duplicate image URL OR duplicate name (case-insensitive)
-        #     is_duplicate = False
-        #     if img_url and img_url in seen_images:
-        #         is_duplicate = True                
-        #     if name_lower and name_lower in seen_names:
-        #         is_duplicate = True            
-        #     if is_duplicate:
-        #         continue               
-        #     unique_by_image.append(cand)
-        #     if img_url:
-        #         seen_images.add(img_url)
-        #     if name_lower:
-        #         seen_names.add(name_lower)
-        
-        # candidates = unique_by_image
-        # logger.info(f"After image/name deduplication: {len(candidates)} unique candidates remain.\n")
+            # Keep candidates without images
+            if not img_url:
+                unique_candidates.append(cand)
+                continue
+            
+            # Skip if we've seen this image before
+            if img_url in seen_images:
+                logger.info(f"Skipping duplicate image for '{cand.get('name')}': {img_url}")
+                continue
+            
+            # New unique image - keep it
+            unique_candidates.append(cand)
+            seen_images.add(img_url)
 
+        candidates = unique_candidates
+        logger.info(f"After image deduplication: {len(candidates)} unique candidates remain\n")
 
         # Attach stable ids to candidates
         for idx, cand in enumerate(candidates):

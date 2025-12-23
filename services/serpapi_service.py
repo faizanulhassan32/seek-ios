@@ -140,6 +140,41 @@ class SerpApiService:
             logger.error(f"Error fetching image from SerpApi: {str(e)}")
             return None
 
+    def fetch_multiple_images(self, query: str, count: int = 5) -> List[str]:
+        """
+        Fetch multiple image URLs for a query using Google Images via SerpApi
+        """
+        if not self.api_key:
+            return []
+            
+        try:
+            params = {
+                "q": query,
+                "api_key": self.api_key,
+                "engine": "google_images",
+                "google_domain": "google.com",
+                "gl": "us",
+                "hl": "en",
+                "num": count
+            }
+            
+            response = requests.get(self.BASE_URL, params=params, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                images = []
+                for result in data.get("images_results", [])[:count]:
+                    img_url = result.get("original")
+                    if img_url:
+                        images.append(img_url)
+                
+                logger.info(f"Found {len(images)} images for query: {query}")
+                return images
+            
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching multiple images from SerpApi: {str(e)}")
+            return []
+
     def _parse_knowledge_graph(self, kg: Dict) -> Optional[Dict]:
         """Parse a Knowledge Graph entry into a candidate dict"""
         try:
