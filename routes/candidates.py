@@ -185,14 +185,14 @@ def get_candidates_ranked():
         for idx, cand in enumerate(candidates):
             cand['id'] = str(cand.get('id') or cand.get('name') or f"candidate-{idx}")
 
-        # Run LLM deduplication for SerpAPI candidates
-        logger.info(f"Running LLM deduplication for {len(candidates)} candidates")
-        try:
-            websearch_service = get_websearch_service()
-            candidates = websearch_service.deduplicate_candidates(candidates)
-            logger.info(f"After deduplication: {len(candidates)} candidates remain\n")
-        except Exception as e:
-            logger.warning(f"Dedup failed: {e}")
+        # # Run LLM deduplication for SerpAPI candidates
+        # logger.info(f"Running LLM deduplication for {len(candidates)} candidates")
+        # try:
+        #     websearch_service = get_websearch_service()
+        #     candidates = websearch_service.deduplicate_candidates(candidates)
+        #     logger.info(f"After deduplication: {len(candidates)} candidates remain\n")
+        # except Exception as e:
+        #     logger.warning(f"Dedup failed: {e}")
 
         # Validate candidate images and filter out non-face images
         logger.info(f"Validating candidate images for {len(candidates)} candidates")
