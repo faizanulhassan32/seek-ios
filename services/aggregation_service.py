@@ -22,7 +22,7 @@ class AggregationService:
         websearch_result: Dict,
         apify_results: List[Dict],
         structured_info: Dict,
-        pdl_data: Dict = None,
+        # pdl_data: Dict = None,
         reference_photo: str = None
     ) -> Dict:
         """
@@ -42,44 +42,45 @@ class AggregationService:
         # Actually, raw_sources is initialized at the end of the method.
         # Let's add PDL extraction logic here.
 
-        # Integrate PDL Data
-        if pdl_data:
-            # Basic Info
-            pdl_basic = {
-                'name': pdl_data.get('full_name'),
-                'occupation': pdl_data.get('job_title'),
-                'location': pdl_data.get('location_name'),
-                'company': pdl_data.get('job_company_name'),
-                'education': [
-                    edu.get('school', {}).get('name') 
-                    for edu in pdl_data.get('education', []) 
-                    if edu.get('school', {}).get('name')
-                ]
-            }
-            basic_info = self._merge_basic_info(basic_info, pdl_basic)
+        # # Integrate PDL Data
+        # if pdl_data:
+        #     # Basic Info
+        #     pdl_basic = {
+        #         'name': pdl_data.get('full_name'),
+        #         'occupation': pdl_data.get('job_title'),
+        #         'location': pdl_data.get('location_name'),
+        #         'company': pdl_data.get('job_company_name'),
+        #         'education': [
+        #             edu.get('school', {}).get('name') 
+        #             for edu in pdl_data.get('education', []) 
+        #             if edu.get('school', {}).get('name')
+        #         ]
+        #     }
+        #     basic_info = self._merge_basic_info(basic_info, pdl_basic)
             
-            # Social Profiles from PDL
-            if pdl_data.get('linkedin_url'):
-                social_profiles.append({
-                    'platform': 'linkedin',
-                    'username': pdl_data.get('linkedin_username'),
-                    'url': pdl_data.get('linkedin_url'),
-                    'source': 'pdl'
-                })
-            if pdl_data.get('twitter_url'):
-                social_profiles.append({
-                    'platform': 'twitter',
-                    'username': pdl_data.get('twitter_username'),
-                    'url': pdl_data.get('twitter_url'),
-                    'source': 'pdl'
-                })
-            if pdl_data.get('facebook_url'):
-                 social_profiles.append({
-                    'platform': 'facebook',
-                    'username': pdl_data.get('facebook_username'),
-                    'url': pdl_data.get('facebook_url'),
-                    'source': 'pdl'
-                })
+        #     # Social Profiles from PDL
+        #     if pdl_data.get('linkedin_url'):
+        #         social_profiles.append({
+        #             'platform': 'linkedin',
+        #             'username': pdl_data.get('linkedin_username'),
+        #             'url': pdl_data.get('linkedin_url'),
+        #             'source': 'pdl'
+        #         })
+        #     if pdl_data.get('twitter_url'):
+        #         social_profiles.append({
+        #             'platform': 'twitter',
+        #             'username': pdl_data.get('twitter_username'),
+        #             'url': pdl_data.get('twitter_url'),
+        #             'source': 'pdl'
+        #         })
+        #     if pdl_data.get('facebook_url'):
+        #          social_profiles.append({
+        #             'platform': 'facebook',
+        #             'username': pdl_data.get('facebook_username'),
+        #             'url': pdl_data.get('facebook_url'),
+        #             'source': 'pdl'
+        #         })
+
 
         # Add social profiles from Apify results
         for result in apify_results:
@@ -202,10 +203,7 @@ class AggregationService:
         # --------------------
 
         # Build raw_sources for transparency
-        # Build raw_sources for transparency
         raw_sources = []
-        # OpenAI websearch source hidden per user request
-
 
         for result in apify_results:
             if result.get('success', False):
@@ -215,14 +213,14 @@ class AggregationService:
                     'summary': f"Scraped {result.get('source')} data"
                 })
 
-        if pdl_data:
-            # Skip adding PDL to raw sources as per user request to hide it from UI
-            pass
-            # raw_sources.append({
-            #     'source': 'people_data_labs',
-            #     'timestamp': None,
-            #     'summary': 'Enriched profile data from People Data Labs'
-            # })
+        # if pdl_data:
+        #     # Skip adding PDL to raw sources as per user request to hide it from UI
+        #     pass
+        #     # raw_sources.append({
+        #     #     'source': 'people_data_labs',
+        #     #     'timestamp': None,
+        #     #     'summary': 'Enriched profile data from People Data Labs'
+        #     # })
 
         # OSINT Data Processing
         public_records = {'relatives': [], 'locations': []}

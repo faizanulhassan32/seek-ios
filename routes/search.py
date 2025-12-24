@@ -113,8 +113,8 @@ def fetch_google_image_urls(name: str) -> List[Dict]:
         logger.warning("Google API credentials not set; skipping image fetch")
         return []
 
-    # Add "portrait" and "profile" keywords to focus on person photos
-    search_query = f"{name} portrait OR profile OR headshot person"
+    # Use the targeted query (already includes name + occupation + location) with face-focused keywords
+    search_query = f"{name} portrait OR profile OR headshot"
     
     params = {
         'q': search_query,
@@ -199,29 +199,33 @@ def search_person():
         if not query:
             return jsonify({'error': 'Query cannot be empty'}), 400
 
-        # Optional reference photo for Phase 2 face verification via Supabase ID
+        candidate = data.get('candidate')
+
         reference_photo_id = data.get('referencePhotoId')
-        reference_photo = None  # base64 populated only after download
+        reference_photo = None
         reference_temp_path = None
         reference_bytes = None
         if reference_photo_id:
             logger.info(f"ReferencePhotoId provided: {reference_photo_id}; downloading from storage")
 
-        # Normalize query for cache lookup
+
+        # ===== Check for profile existing in cache =====
         normalized_query = normalize_query(query)
-        
-        # Check if we have a selected candidate to skip initial search
-        candidate = data.get('candidate')
-        
-        # Construct cache key
-        # If candidate is selected, append candidate ID to query to differentiate 
-        # between different people with the same name (e.g. "John Smith" vs "John Smith")
         cache_key = normalized_query
         if candidate and candidate.get('id'):
             cache_key = f"{normalized_query}::{candidate.get('id')}"
 
-        # Initialize Supabase client
         supabase_client = get_supabase_client()
+
+        # Check cache first using the specific cache key
+        cached_person = supabase_client.get_person_by_query(cache_key)
+        if cached_person:
+            logger.info(f"Cache hit for '{cache_key}' — returning cached result")
+            # Convert cached dict to Person object and return
+            person = Person.from_dict(cached_person)
+            return jsonify(person.to_response()), 200
+        logger.info(f"Cache miss for '{cache_key}' — performing fresh search\n")
+
 
         # If we received a referencePhotoId, download the image from Supabase and store locally
         if reference_photo_id:
@@ -241,27 +245,15 @@ def search_person():
                 logger.warning(f"Failed to download reference photo '{reference_photo_id}': {e}")
                 reference_photo = None
 
-        # Check cache first using the specific cache key
-        # If a reference photo ID is provided, bypass cache to ensure verification is applied
-        cached_person = None
-        if not reference_photo_id:
-            cached_person = supabase_client.get_person_by_query(cache_key)
-        if cached_person:
-            logger.info(f"Cache hit for '{cache_key}' — returning cached result")
-            # Convert cached dict to Person object and return
-            person = Person.from_dict(cached_person)
-            return jsonify(person.to_response()), 200
 
-        logger.info(f"Cache miss for '{cache_key}' — performing fresh search\n")
-        # Initialize services for fresh search
         websearch_service = get_websearch_service()
         apify_service = get_apify_service()
         aggregation_service = get_aggregation_service()
 
 
+        #  If candidate is provided, use that to guide the search
         if candidate:
             logger.info(f"Deep search requested for candidate: {candidate.get('name')}")
-            # Use candidate info as the base for structured data
             websearch_result = {
                 'source': 'candidate_selection',
                 'query': query,
@@ -269,33 +261,28 @@ def search_person():
                 'timestamp': None
             }
             
-            # Construct structured info from candidate data
             structured_info = {
                 'basic_info': {
                     'name': candidate.get('name'),
-                    'occupation': candidate.get('summary'), # Use summary as occupation/desc
-                    'location': '', # We might not have this yet
-                    'education': [],
-                    'company': ''
+                    'occupation': candidate.get('occupation'),
+                    'location': candidate.get('location', ''),
+                    'education': candidate.get('education') or [],
+                    'company': candidate.get('currentCompany', '')
                 },
-                'social_profiles': [], # Will be filled by extraction or scraping
+                'social_profiles': [],
                 'photos': [{'url': candidate.get('imageUrl'), 'source': 'candidate_selection'}] if candidate.get('imageUrl') else [],
                 'notable_mentions': []
             }
             
-            # We still might want to do a targeted web search to fill in gaps if needed,
-            # but for now let's assume we proceed to extraction/scraping.
-            # Actually, to get social profiles, we probably DO need a targeted web search 
-            # if the candidate object doesn't have them.
-            # Let's do a targeted search for the specific candidate name to get social profiles.
-            logger.info(f"Performing targeted websearch for candidate: {candidate.get('name')}")
-            websearch_result = websearch_service.search_person(candidate.get('name'))
+            logger.info(f"Performing targeted websearch for candidate: {candidate.get('name')} {candidate.get('occupation')} {candidate.get('location', '')}")
             
-            # Extract structured info from this new search
+            websearch_result = websearch_service.search_person(f"{candidate.get('name')} {candidate.get
+            ('occupation')} {candidate.get('location', '')}".strip())
+            
             new_structured_info = websearch_result.get('structured_data')
             if not new_structured_info or 'error' in websearch_result:
                 new_structured_info = websearch_service.extract_structured_info(
-                    candidate.get('name'),
+                    f"{candidate.get('name')} {candidate.get('occupation')} {candidate.get('location', '')}".strip(),
                     websearch_result.get('content', '')
                 )
             
@@ -303,17 +290,18 @@ def search_person():
             structured_info = new_structured_info
             if candidate.get('name'):
                 structured_info.setdefault('basic_info', {})['name'] = candidate.get('name')
+            if candidate.get('education'):
+                structured_info.setdefault('basic_info', {})['education'] = candidate.get('education')
             if candidate.get('imageUrl'):
                 # Prepend candidate photo
                 structured_info.setdefault('photos', []).insert(0, {'url': candidate.get('imageUrl'), 'source': 'candidate_selection'})
-
+        
+        # else directly search user query 
         else:
-            # Step 1: Perform websearch (Legacy flow or direct search)
             logger.info("Step 1: Performing websearch...")
             websearch_result = websearch_service.search_person(query)
             # save_step_output(1, 'websearch', websearch_result, query)
 
-            # Step 2: Extract structured information from websearch
             logger.info("Step 2: Extracting structured information...")
             structured_info = websearch_result.get('structured_data')
             if not structured_info or 'error' in websearch_result:
@@ -322,6 +310,7 @@ def search_person():
                     websearch_result.get('content', '')
                 )
             # save_step_output(2, 'structured_info', structured_info, query)
+
 
         # Step 3: Identify social media handles
         logger.info("Step 3: Identifying social media handles...")
@@ -381,8 +370,8 @@ def search_person():
                         else:
                             logger.info(f"Skipping invalid {platform} URL: {profile_url}")
 
+
         # Step 4: Execute Parallel Tasks (Social Scraping + Answer Generation)
-        
         logger.info("Step 4: Executing parallel tasks (Scraping + Answer Generation)...")
         
         apify_results = []
@@ -471,12 +460,12 @@ def search_person():
         with ThreadPoolExecutor(max_workers=3) as executor:
             future_scraping = executor.submit(run_scraping)
             future_answer = executor.submit(run_answer_generation)
-            future_pdl = executor.submit(run_pdl_enrichment)
+            # future_pdl = executor.submit(run_pdl_enrichment)
 
             # Wait for all to complete
             apify_results = future_scraping.result()
             generated_answer, related_questions = future_answer.result()
-            pdl_data = future_pdl.result()
+            # pdl_data = future_pdl.result()
             
             if generated_answer:
                 answer_generated_at = datetime.utcnow()
@@ -500,7 +489,7 @@ def search_person():
             websearch_result,
             apify_results,
             structured_info,
-            pdl_data,
+            # pdl_data,
             reference_photo=reference_photo  # Pass reference photo for Phase 2 verification
         )
         # save_step_output(5, 'aggregated_data', aggregated_data, query)
@@ -511,7 +500,16 @@ def search_person():
             logger.info(f"Found {len(existing_photos)} photos from direct sources; skipping Google fallback.\n")
         else:
             logger.info("No photos from direct sources; fetching from Google Images...")
-            google_photos = fetch_google_image_urls(query)
+            basic_info = aggregated_data.get('basic_info', {})
+            name = basic_info.get('name', query)
+            occupation = basic_info.get('occupation', '')
+            location = basic_info.get('location', '')
+            
+            targeted_query = f"{name} {occupation} {location}".strip()
+            if not targeted_query:
+                targeted_query = query
+                
+            google_photos = fetch_google_image_urls(targeted_query)
             if google_photos:
                 logger.info(f"Google Images provided {len(google_photos)} photos\n")
                 aggregated_data["photos"] = google_photos

@@ -34,7 +34,7 @@ class WebSearchService:
                 You are a person search assistant with web search capabilities. Use the web search tool to find current information about people.
 
                 After searching, provide structured information with these keys:
-                - basic_info: object with name, age, location, occupation, education, company
+                - basic_info: object with name, age, location, occupation, education, currentCompany, description, imageUrl
                 - social_profiles: array of objects with platform, username, url, followers, verified
                 - photos: array of objects with url, source, caption
                 - notable_mentions: array of objects with title, description, url, source. IMPORTANT: Include ONLY items that are directly about this specific person. Exclude general news about their company, industry, or unrelated people with similar names.
@@ -66,8 +66,13 @@ class WebSearchService:
                                         "age": {"type": ["string", "null"]},
                                         "location": {"type": ["string", "null"]},
                                         "occupation": {"type": ["string", "null"]},
-                                        "education": {"type": ["string", "null"]},
-                                        "company": {"type": ["string", "null"]}
+                                        "education": {
+                                            "type": ["array", "null"],
+                                            "items": {"type": "string"}
+                                        },
+                                        "currentCompany": {"type": ["string", "null"]},
+                                        "description": {"type": "string"},
+                                        "imageUrl": {"type": ["string", "null"]}
                                     }
                                 },
                                 "social_profiles": {
@@ -111,6 +116,10 @@ class WebSearchService:
                         }
                     }
                 ],
+                tool_choice={
+                    "type": "tool",
+                    "name": "provide_person_info"
+                },
                 messages=[
                     {
                         "role": "user",
@@ -119,7 +128,7 @@ class WebSearchService:
                 ]
             )
 
-            # Process the response - Claude may use web_search tool multiple times
+            # Process the response
             result_text = ""
             web_search_results = []
             structured_data = {}
@@ -132,99 +141,6 @@ class WebSearchService:
                         logger.info(f"Web search executed with query: {content_block.input.get('query', '')}")
                         web_search_results.append(content_block.input)
                     elif content_block.name == "provide_person_info":
-                        structured_data = content_block.input
-
-            # If Claude used tools, we need to continue the conversation
-            if response.stop_reason == "tool_use" and not structured_data:
-                # Continue conversation with tool results
-                messages = [
-                    {
-                        "role": "user",
-                        "content": f"Search the web for comprehensive information about: {query}"
-                    },
-                    {
-                        "role": "assistant",
-                        "content": response.content
-                    }
-                ]
-
-                # Get final structured response
-                final_response = self.anthropic_client.messages.create(
-                    model="claude-haiku-4-5",
-                    max_tokens=4096,
-                    temperature=0,
-                    system=system_prompt,
-                    tools=[
-                        {
-                            "name": "provide_person_info",
-                            "description": "Provide structured information about a person after web search",
-                            "input_schema": {
-                                "type": "object",
-                                "properties": {
-                                    "basic_info": {
-                                        "type": "object",
-                                        "properties": {
-                                            "name": {"type": "string"},
-                                            "age": {"type": ["string", "null"]},
-                                            "location": {"type": ["string", "null"]},
-                                            "occupation": {"type": ["string", "null"]},
-                                            "education": {"type": ["string", "null"]},
-                                            "company": {"type": ["string", "null"]}
-                                        }
-                                    },
-                                    "social_profiles": {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "platform": {"type": "string"},
-                                                "username": {"type": ["string", "null"]},
-                                                "url": {"type": "string"},
-                                                "followers": {"type": ["string", "null"]},
-                                                "verified": {"type": ["boolean", "null"]}
-                                            }
-                                        }
-                                    },
-                                    "photos": {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "url": {"type": "string"},
-                                                "source": {"type": ["string", "null"]},
-                                                "caption": {"type": ["string", "null"]}
-                                            }
-                                        }
-                                    },
-                                    "notable_mentions": {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "title": {"type": "string"},
-                                                "description": {"type": ["string", "null"]},
-                                                "url": {"type": ["string", "null"]},
-                                                "source": {"type": ["string", "null"]}
-                                            }
-                                        }
-                                    }
-                                },
-                                "required": ["basic_info", "social_profiles", "photos", "notable_mentions"]
-                            }
-                        }
-                    ],
-                    tool_choice={
-                        "type": "tool",
-                        "name": "provide_person_info"
-                    },
-                    messages=messages
-                )
-
-                result_text = ""
-                for content_block in final_response.content:
-                    if content_block.type == "text":
-                        result_text += content_block.text
-                    elif content_block.type == "tool_use" and content_block.name == "provide_person_info":
                         structured_data = content_block.input
 
             if not structured_data:
@@ -304,7 +220,10 @@ class WebSearchService:
                                     "age": {"type": ["string", "null"]},
                                     "location": {"type": ["string", "null"]},
                                     "occupation": {"type": ["string", "null"]},
-                                    "education": {"type": ["string", "null"]}
+                                    "education": {
+                                        "type": ["array", "null"],
+                                        "items": {"type": "string"}
+                                    }
                                 }
                             },
                             "social_profiles": {
@@ -506,10 +425,12 @@ class WebSearchService:
                 For each UNIQUE candidate, find:
                 - id: Unique identifier format: "name-occupation-city"
                 - name: Full name (remove titles like "Dr.")
+                - age: Current age in years (or null if not available)
                 - description: Format as "Primary Occupation • Company/Organization • Location"
                 - occupation: Primary job title or profession
                 - currentCompany: Current employer or organization name (or null if not applicable)
                 - location: Full location as "City, State/Region, Country"
+                - education: Education background as array of institutions/degrees (e.g., ["Harvard University, MBA", "Stanford BS Computer Science"]) or null if not available
                 - imageUrl: Direct URL to profile photo (or null)
 
                 VERIFICATION STEP: Before finalizing your list, check that all candidates have:
@@ -552,6 +473,10 @@ class WebSearchService:
                                                 "type": "string",
                                                 "description": "Full name without titles"
                                             },
+                                            "age": {
+                                                "type": ["string", "null"],
+                                                "description": "Current age in years (e.g., '32') or null if not available"
+                                            },
                                             "description": {
                                                 "type": "string",
                                                 "description": "Format: 'Primary Occupation • Company/Organization • Location'"
@@ -567,6 +492,11 @@ class WebSearchService:
                                             "location": {
                                                 "type": "string",
                                                 "description": "City and Country (e.g., 'London, England' or 'Golden, Colorado, USA')"
+                                            },
+                                            "education": {
+                                                "type": ["array", "null"],
+                                                "items": {"type": "string"},
+                                                "description": "Education background as array of institutions/degrees (e.g., ['Harvard University, MBA', 'Stanford BS Computer Science'])"
                                             },
                                             "imageUrl": {
                                                 "type": ["string", "null"],
