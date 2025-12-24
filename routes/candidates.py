@@ -5,6 +5,7 @@ import uuid
 from typing import List, Dict
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+import threading
 
 from services.websearch_service import get_websearch_service
 from services.serpapi_service import get_serpapi_service
@@ -32,53 +33,71 @@ def fetch_multiple_images_with_dedup(candidates, serpapi_service, rekognition_se
     """
     logger.info(f"Fetching multiple images for {len(candidates)} candidates with face-based deduplication\n")
     
-    # Track face embeddings we've already assigned
-    assigned_embeddings = []
+    # Track assigned image bytes to compare against
+    assigned_image_bytes = []
+    assigned_lock = threading.Lock()
     
-    for candidate in candidates:
+    def process_candidate_images(candidate):
+
         name = candidate.get('name', '')
+        occupation = candidate.get('occupation', '')
+        location = candidate.get('location', '')
+        search_query = f"{name} {occupation} {location}".strip()
         candidate['imageUrl'] = None  # Reset
         
-        # Fetch top 5 image results for this candidate (simple name query)
-        logger.info(f"Fetching images for: {name}")
-        image_urls = serpapi_service.fetch_multiple_images(name, count=5)
+        logger.info(f"Fetching images for: {search_query}")
+        image_urls = serpapi_service.fetch_multiple_images(search_query, count=2)
         
         if not image_urls:
-            continue
+            return candidate
         
-        # Try each image until we find a unique face
-        for img_url in image_urls:
+        def check_image(img_url):
             try:
-                # Get face embedding from this image
-                embedding = rekognition_service.get_face_embedding(img_url)
+                # Download the potential image
+                potential_bytes = rekognition_service._download_image(img_url)
+                if not potential_bytes:
+                    return None
                 
-                if not embedding:
-                    continue
+                # Quick validation: try to normalize, skip if invalid
+                if not rekognition_service._normalize_image_bytes(potential_bytes):
+                    return None
                 
                 # Check if this face is similar to any we've already assigned
-                is_duplicate = False
-                for assigned_emb in assigned_embeddings:
-                    if rekognition_service.are_faces_similar(embedding, assigned_emb):
-                        is_duplicate = True
-                        break
+                with assigned_lock:
+                    for assigned_bytes in assigned_image_bytes:
+                        similarity = rekognition_service.compare_faces_bytes_to_bytes(potential_bytes, assigned_bytes, 70.0)
+                        if similarity > 0:  # Any match above threshold
+                            return None  # Duplicate
                 
-                if not is_duplicate:
-                    # This is a unique face!
-                    candidate['imageUrl'] = img_url
-                    assigned_embeddings.append(embedding)
-                    logger.info(f"  ✅ Assigned unique image to '{name}'\n")
-                    break
-                    
+                # Unique face found
+                return img_url, potential_bytes
             except Exception as e:
-                continue
+                return None
+        
+        # Check images sequentially for this candidate (since only 2, and parallel candidates)
+        for img_url in image_urls:
+            result = check_image(img_url)
+            if result:
+                img_url, potential_bytes = result
+                with assigned_lock:
+                    assigned_image_bytes.append(potential_bytes)
+                candidate['imageUrl'] = img_url
+                logger.info(f"  ✅ Assigned unique image to '{search_query}'")
+                break
         
         if not candidate.get('imageUrl'):
-            logger.info(f"❌ Could not find unique face for '{name}'\n")
+            logger.info(f"❌ Could not find unique face for '{search_query}'")
+        
+        return candidate
     
-    with_images = sum(1 for c in candidates if c.get('imageUrl'))
-    logger.info(f"Face-based deduplication complete: {with_images}/{len(candidates)} candidates have unique images\n")
+    # Process all candidates in parallel
+    with ThreadPoolExecutor(max_workers=min(5, len(candidates))) as executor:
+        updated_candidates = list(executor.map(process_candidate_images, candidates))
     
-    return candidates
+    with_images = sum(1 for c in updated_candidates if c.get('imageUrl'))
+    logger.info(f"Face-based deduplication complete: {with_images}/{len(updated_candidates)} candidates have unique images\n")
+    
+    return updated_candidates
 
 
 @candidates_bp.route('/candidates/ranked', methods=['POST'])
@@ -146,7 +165,7 @@ def get_candidates_ranked():
         candidates = []
 
         websearch_service = get_websearch_service()
-        candidates = websearch_service.fetch_candidates_from_web(refined_query, max_candidates=6) or []
+        candidates = websearch_service.fetch_candidates_from_web(refined_query, max_candidates=5) or []
         logger.info(f"Claude web search returned {len(candidates)} candidates\n")
 
         if not candidates:
@@ -171,7 +190,7 @@ def get_candidates_ranked():
             
             # Skip if we've seen this image before
             if img_url in seen_images:
-                logger.info(f"Skipping duplicate image for '{cand.get('name')}': {img_url}")
+                logger.info(f"Skipping duplicate image for '{cand.get('name', '')} {cand.get('occupation', '')} {cand.get('location', '')}': {img_url}")
                 continue
             
             # New unique image - keep it
@@ -204,19 +223,19 @@ def get_candidates_ranked():
             
             # No image URL: keep candidate (will have similarityScore=0) 
             if not image_url:
-                logger.info(f"Candidate '{cand.get('name')}' has no imageUrl; keeping in results")
+                logger.info(f"Candidate '{cand.get('name', '')} {cand.get('occupation', '')} {cand.get('location', '')}' has no imageUrl; keeping in results")
                 cand['hasFaceImage'] = False
                 final_candidates.append(cand)
                 continue
             
             # Has image URL: validate it contains a face
             if rekognition.validate_image(image_url):
-                logger.info(f"✅ '{cand.get('name')}' has valid face image")
+                logger.info(f"✅ '{cand.get('name', '')} {cand.get('occupation', '')} {cand.get('location', '')}' has valid face image")
                 cand['hasFaceImage'] = True
                 final_candidates.append(cand)
             else:
                 # Image exists but no face (landscape/logo/etc) - DISCARD
-                logger.info(f"❌ Discarding '{cand.get('name')}' - image has no face: {image_url}")
+                logger.info(f"❌ Discarding '{cand.get('name', '')} {cand.get('occupation', '')} {cand.get('location', '')}' - image has no face: {image_url}")
         
         candidates = final_candidates
         face_count = sum(1 for c in candidates if c.get('hasFaceImage', False))
@@ -230,6 +249,8 @@ def get_candidates_ranked():
         # If no reference file, return all candidates with zero scores
         if not reference_bytes:
             logger.info("No reference image provided; returning all candidates with similarityScore=0")
+            # Sort by image presence first (candidates with images on top), then assign ranks
+            candidates = sorted(candidates, key=lambda c: (c.get('hasFaceImage', False), c.get('similarityScore', 0)), reverse=True)
             for idx, c in enumerate(candidates, start=1):
                 c['similarityScore'] = 0.0
                 c['rank'] = idx
@@ -244,18 +265,17 @@ def get_candidates_ranked():
             # Only compare candidates with valid face images
             if cand.get('hasFaceImage', False):
                 image_url = cand.get('imageUrl')
-                logger.info(f"Comparing '{cand.get('name')}': {image_url}")
+                logger.info(f"Comparing '{cand.get('name', '')} {cand.get('occupation', '')} {cand.get('location', '')}': {image_url}")
                 try:
                     similarity = rekognition.compare_faces_bytes(reference_bytes, image_url, 70.0) or 0.0
                     logger.info(f"  -> Similarity: {similarity}%")
                 except Exception as e:
-                    logger.warning(f"Comparison failed for '{cand.get('name')}': {e}")
+                    logger.warning(f"Comparison failed for '{cand.get('name', '')} {cand.get('occupation', '')} {cand.get('location', '')}': {e}")
             
             cand['similarityScore'] = round(similarity, 2)
 
         # Sort by similarity score (candidates without images will be at bottom with score=0)
         candidates = _rank_by_score(candidates)
-        logger.info(f"Ranking complete. Top candidate: '{candidates[0].get('name')}' with score {candidates[0].get('similarityScore')}%")
         return jsonify({'query': refined_query, 'candidates': candidates, 'referencePhotoId': reference_photo_id, 'message': 'Face comparison completed'}), 200
 
     except Exception as e:

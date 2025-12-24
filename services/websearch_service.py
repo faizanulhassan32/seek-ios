@@ -478,7 +478,7 @@ class WebSearchService:
             return candidates # Fallback to original list
 
 
-    def fetch_candidates_from_web(self, query: str, max_candidates: int = 6) -> List[Dict]:
+    def fetch_candidates_from_web(self, query: str, max_candidates: int = 5) -> List[Dict]:
         """
         Find potential person candidates using Claude's web search tool.
         Returns a list of candidates with basic info, limited to max_candidates.
@@ -489,21 +489,31 @@ class WebSearchService:
             system_prompt = f"""
                 You are a person search assistant. Use web search to find potential candidates matching the query.
 
-                CRITICAL: Find {max_candidates} UNIQUE INDIVIDUALS - not the same person with different job titles.
-                - If you find "Nathan Lytle - Flight Nurse" and "Nathan Lytle - Surgeon", verify these are DIFFERENT people before including both
-                - Look for distinguishing information (different companies, different locations, different LinkedIn profiles, etc.)
-                - If uncertain whether two results are the same person, only include ONE of them
+                CRITICAL DEDUPLICATION RULES:
+                1. Return EXACTLY {max_candidates} COMPLETELY DIFFERENT INDIVIDUALS
+                2. Before adding a candidate, verify they are NOT already in your list by checking:
+                - Different LinkedIn profile URLs
+                - Different company names
+                - Different locations (city/country)
+                - Different professional backgrounds
+                3. If you find multiple results for the same person (e.g., "Emma Watson - Actress" and "Emma Watson - Activist"), 
+                choose ONLY ONE entry - the most professionally relevant one
+                4. Track which individuals you've already included to prevent duplicates
 
-                For each candidate, try to find a profile photo URL from their LinkedIn, company website, or professional profile.
+                For each UNIQUE candidate, find:
+                - id: Unique identifier (name + primary occupation + location)
+                - name: Full name (remove titles like "Dr." or profile counts like "20+ profiles")
+                - description: Format as "Primary Occupation • Company/Organization • Location"
+                - occupation: Primary job title or profession
+                - currentCompany: Current employer or organization name
+                - location: City and Country
+                - imageUrl: Direct URL to profile photo from LinkedIn/professional site, or null
 
-                After searching, provide a list of candidate objects (maximum {max_candidates} candidates).
-                Each candidate object must have:
-                - id: A unique string identifier (can be the name + occupation)
-                - name: Full name (Cleaned: remove titles like "Dr." or prefixes like "20+ profiles")
-                - description: A concise summary in the format "Occupation • Location"
-                - imageUrl: A direct URL to their profile photo (if found, otherwise null)
+                VERIFICATION STEP: Before finalizing your list, check that all {max_candidates} candidates have:
+                - Different names OR
+                - Same name but clearly different people (different locations AND different companies AND different roles)
 
-                Return ONLY the most relevant {max_candidates} UNIQUE INDIVIDUALS.
+                Return ONLY {max_candidates} verified unique individuals.
             """
 
             response = self.anthropic_client.messages.create(
@@ -519,7 +529,7 @@ class WebSearchService:
                     },
                     {
                         "name": "provide_candidates",
-                        "description": "Provide a list of person candidates found from web search",
+                        "description": "Provide a list of UNIQUE person candidates. Each candidate must be a different individual.",
                         "input_schema": {
                             "type": "object",
                             "properties": {
@@ -528,24 +538,49 @@ class WebSearchService:
                                     "items": {
                                         "type": "object",
                                         "properties": {
-                                            "id": {"type": "string"},
-                                            "name": {"type": "string"},
-                                            "description": {"type": "string"},
-                                            "imageUrl": {"type": ["string", "null"], "description": "URL to profile photo or null if not found"}
+                                            "id": {
+                                                "type": "string",
+                                                "description": "Unique identifier combining name + occupation + location"
+                                            },
+                                            "name": {
+                                                "type": "string",
+                                                "description": "Full name without titles"
+                                            },
+                                            "description": {
+                                                "type": "string",
+                                                "description": "Format: 'Primary Occupation • Company/Organization • Location'"
+                                            },
+                                            "occupation": {
+                                                "type": "string",
+                                                "description": "Primary job title or profession (e.g., 'Regional Director', 'Actress', 'Systems Engineer')"
+                                            },
+                                            "currentCompany": {
+                                                "type": ["string", "null"],
+                                                "description": "Current employer or organization name"
+                                            },
+                                            "location": {
+                                                "type": "string",
+                                                "description": "City and Country (e.g., 'London, England' or 'Golden, Colorado, USA')"
+                                            },
+                                            "imageUrl": {
+                                                "type": ["string", "null"],
+                                                "description": "URL to profile photo or null if not found"
+                                            }
                                         },
-                                        "required": ["id", "name", "description", "imageUrl"
-                                        ]
-                                    }
+                                        "required": ["id", "name", "description", "occupation", "currentCompany", "location", "imageUrl"]
+                                    },
+                                    "maxItems": max_candidates,
+                                    "uniqueItems": True
                                 }
                             },
                             "required": ["candidates"]
                         }
-                    }
+                    },
                 ],
                 messages=[
                     {
                         "role": "user",
-                        "content": f'Find candidates for: "{query}"'
+                        "content": f'Find {max_candidates} COMPLETELY DIFFERENT individuals for: "{query}". If the same person appears in multiple search results, include them only ONCE.'
                     }
                 ]
             )
@@ -560,7 +595,7 @@ class WebSearchService:
                 messages = [
                     {
                         "role": "user",
-                        "content": f'Find candidates for: "{query}"'
+                        "content": f'Find {max_candidates} COMPLETELY DIFFERENT individuals for: "{query}". If the same person appears in multiple search results, include them only ONCE.'
                     },
                     {
                         "role": "assistant",
@@ -573,29 +608,56 @@ class WebSearchService:
                     max_tokens=4096,
                     temperature=0,
                     system=system_prompt,
-                    tools=[{
-                        "name": "provide_candidates",
-                        "description": "Provide a list of person candidates found from web search",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {
-                                "candidates": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "id": {"type": "string"},
-                                            "name": {"type": "string"},
-                                            "description": {"type": "string"},
-                                            "imageUrl": {"type": ["string", "null"], "description": "URL to profile photo or null if not found"}
+                    tools=[
+                        {
+                            "name": "provide_candidates",
+                            "description": "Provide a list of UNIQUE person candidates. Each candidate must be a different individual.",
+                            "input_schema": {
+                                "type": "object",
+                                "properties": {
+                                    "candidates": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "id": {
+                                                    "type": "string",
+                                                    "description": "Unique identifier combining name + occupation + location"
+                                                },
+                                                "name": {
+                                                    "type": "string",
+                                                    "description": "Full name without titles"
+                                                },
+                                                "description": {
+                                                    "type": "string",
+                                                    "description": "Format: 'Primary Occupation • Company/Organization • Location'"
+                                                },
+                                                "occupation": {
+                                                    "type": "string",
+                                                    "description": "Primary job title or profession (e.g., 'Regional Director', 'Actress', 'Systems Engineer')"
+                                                },
+                                                "currentCompany": {
+                                                    "type": ["string", "null"],
+                                                    "description": "Current employer or organization name"
+                                                },
+                                                "location": {
+                                                    "type": "string",
+                                                    "description": "City and Country (e.g., 'London, England' or 'Golden, Colorado, USA')"
+                                                },
+                                                "imageUrl": {
+                                                    "type": ["string", "null"],
+                                                    "description": "URL to profile photo or null if not found"
+                                                }
+                                            },
+                                            "required": ["id", "name", "description", "occupation", "currentCompany", "location", "imageUrl"]
                                         },
-                                        "required": ["id", "name", "description", "imageUrl"]
+                                        "maxItems": max_candidates,
+                                        "uniqueItems": True
                                     }
-                                }
-                            },
-                            "required": ["candidates"]
-                        }
-                    }
+                                },
+                                "required": ["candidates"]
+                            }
+                        },
                     ],
                     tool_choice={
                         "type": "tool",

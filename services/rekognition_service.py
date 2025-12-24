@@ -147,7 +147,7 @@ class RekognitionService:
             logger.debug(f"{image_url} > Validation failed: {e}")
             return False
 
-    def compare_faces_bytes(self, source_bytes: bytes, target_url: str, threshold: float = 70.0) -> Optional[float]:
+    def compare_faces_bytes(self, source_bytes: bytes, target_url: str, threshold: float = 70.0) -> float:
         """Compare a reference image (bytes) to a target image (URL). Returns similarity score or 0.
         
         Args:
@@ -160,21 +160,18 @@ class RekognitionService:
         """
         if not self.client:
             return 0.0
-        if not target_url:
-            return 0.0
         try:
-            # Normalize both source and target images to JPEG
+            # Normalize source image
             norm_source = self._normalize_image_bytes(source_bytes)
             if not norm_source:
-                logger.warning("Source image could not be normalized for Rekognition")
                 return 0.0
 
+            # Download and normalize target
             raw_target = self._download_image(target_url)
             if not raw_target:
                 return 0.0
             norm_target = self._normalize_image_bytes(raw_target)
             if not norm_target:
-                logger.warning("Target image could not be normalized for Rekognition")
                 return 0.0
 
             response = self.client.compare_faces(
@@ -189,6 +186,43 @@ class RekognitionService:
             return float(best)
         except Exception as e:
             logger.warning(f"Rekognition compare_faces failed: {e}")
+            return 0.0
+
+    def compare_faces_bytes_to_bytes(self, source_bytes: bytes, target_bytes: bytes, threshold: float = 70.0) -> float:
+        """Compare two images (both as bytes). Returns similarity score or 0.
+        
+        Args:
+            source_bytes: Source image as bytes
+            target_bytes: Target image as bytes
+            threshold: Minimum similarity threshold (default 70%)
+            
+        Returns:
+            Similarity score as float, or 0.0 if no match
+        """
+        if not self.client:
+            return 0.0
+        try:
+            # Normalize both images to JPEG
+            norm_source = self._normalize_image_bytes(source_bytes)
+            if not norm_source:
+                return 0.0
+
+            norm_target = self._normalize_image_bytes(target_bytes)
+            if not norm_target:
+                return 0.0
+
+            response = self.client.compare_faces(
+                SourceImage={'Bytes': norm_source},
+                TargetImage={'Bytes': norm_target},
+                SimilarityThreshold=threshold,
+            )
+            matches = response.get('FaceMatches') or []
+            if not matches:
+                return 0.0
+            best = max(m.get('Similarity', 0.0) for m in matches)
+            return float(best)
+        except Exception as e:
+            logger.warning(f"Rekognition compare_faces bytes-to-bytes failed: {e}")
             return 0.0
 
     def detect_faces_in_url(self, image_url: str) -> bool:

@@ -140,7 +140,7 @@ class SerpApiService:
             logger.error(f"Error fetching image from SerpApi: {str(e)}")
             return None
 
-    def fetch_multiple_images(self, query: str, count: int = 5) -> List[str]:
+    def fetch_multiple_images(self, query: str, count) -> List[str]:
         """
         Fetch multiple image URLs for a query using Google Images via SerpApi
         """
