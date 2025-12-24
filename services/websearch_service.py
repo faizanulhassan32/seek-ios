@@ -480,8 +480,9 @@ class WebSearchService:
 
     def fetch_candidates_from_web(self, query: str, max_candidates: int = 5) -> List[Dict]:
         """
-        Find potential person candidates using Claude's web search tool.
-        Returns a list of candidates with basic info, limited to max_candidates.
+            Find potential person candidates using Claude's web search tool.
+            Returns a list of candidates with basic info, limited to max_candidates.
+            May return fewer candidates if fewer unique individuals exist.
         """
         logger.info(f"Finding candidates via Claude web search for query: {query}")
 
@@ -490,30 +491,35 @@ class WebSearchService:
                 You are a person search assistant. Use web search to find potential candidates matching the query.
 
                 CRITICAL DEDUPLICATION RULES:
-                1. Return EXACTLY {max_candidates} COMPLETELY DIFFERENT INDIVIDUALS
+                1. Return UP TO {max_candidates} COMPLETELY DIFFERENT INDIVIDUALS (you may return fewer if fewer unique individuals exist)
                 2. Before adding a candidate, verify they are NOT already in your list by checking:
-                - Different LinkedIn profile URLs
+                - Different occupations/job titles
                 - Different company names
-                - Different locations (city/country)
-                - Different professional backgrounds
+                - Different locations (city AND country)
                 3. If you find multiple results for the same person (e.g., "Emma Watson - Actress" and "Emma Watson - Activist"), 
                 choose ONLY ONE entry - the most professionally relevant one
                 4. Track which individuals you've already included to prevent duplicates
 
+                IMPORTANT: If you can only find 1, 2, or 3 unique individuals with this name, that's acceptable. 
+                Return however many TRULY DIFFERENT people you can find (minimum 1, maximum {max_candidates}).
+
                 For each UNIQUE candidate, find:
-                - id: Unique identifier (name + primary occupation + location)
-                - name: Full name (remove titles like "Dr." or profile counts like "20+ profiles")
+                - id: Unique identifier format: "name-occupation-city"
+                - name: Full name (remove titles like "Dr.")
                 - description: Format as "Primary Occupation • Company/Organization • Location"
                 - occupation: Primary job title or profession
-                - currentCompany: Current employer or organization name
-                - location: City and Country
-                - imageUrl: Direct URL to profile photo from LinkedIn/professional site, or null
+                - currentCompany: Current employer or organization name (or null if not applicable)
+                - location: Full location as "City, State/Region, Country"
+                - imageUrl: Direct URL to profile photo (or null)
 
-                VERIFICATION STEP: Before finalizing your list, check that all {max_candidates} candidates have:
+                VERIFICATION STEP: Before finalizing your list, check that all candidates have:
                 - Different names OR
-                - Same name but clearly different people (different locations AND different companies AND different roles)
+                - Same name but CLEARLY different people verified by:
+                * Different occupation AND
+                * Different company AND
+                * Different location
 
-                Return ONLY {max_candidates} verified unique individuals.
+                Return between 1 and {max_candidates} verified unique individuals with ALL required fields populated.
             """
 
             response = self.anthropic_client.messages.create(
@@ -529,7 +535,7 @@ class WebSearchService:
                     },
                     {
                         "name": "provide_candidates",
-                        "description": "Provide a list of UNIQUE person candidates. Each candidate must be a different individual.",
+                        "description": "Provide a list of UNIQUE person candidates. Return between 1 and the maximum requested, based on how many truly different individuals you find.",
                         "input_schema": {
                             "type": "object",
                             "properties": {
@@ -569,109 +575,39 @@ class WebSearchService:
                                         },
                                         "required": ["id", "name", "description", "occupation", "currentCompany", "location", "imageUrl"]
                                     },
+                                    "minItems": 1,
                                     "maxItems": max_candidates,
                                     "uniqueItems": True
                                 }
                             },
                             "required": ["candidates"]
                         }
-                    },
+                    }
                 ],
+                tool_choice={
+                    "type": "tool",
+                    "name": "provide_candidates"
+                },
                 messages=[
                     {
                         "role": "user",
-                        "content": f'Find {max_candidates} COMPLETELY DIFFERENT individuals for: "{query}". If the same person appears in multiple search results, include them only ONCE.'
+                        "content": f'Find UP TO {max_candidates} COMPLETELY DIFFERENT individuals for: "{query}". If fewer than {max_candidates} unique individuals exist with this name, return however many you can find (minimum 1). If the same person appears in multiple search results, include them only ONCE.'
                     }
                 ]
             )
 
             candidates = []
-            
             for content_block in response.content:
                 if content_block.type == "tool_use" and content_block.name == "provide_candidates":
                     candidates = content_block.input.get("candidates", [])
+                    break
 
-            if response.stop_reason == "tool_use" and not candidates:
-                messages = [
-                    {
-                        "role": "user",
-                        "content": f'Find {max_candidates} COMPLETELY DIFFERENT individuals for: "{query}". If the same person appears in multiple search results, include them only ONCE.'
-                    },
-                    {
-                        "role": "assistant",
-                        "content": response.content
-                    }
-                ]
-
-                final_response = self.anthropic_client.messages.create(
-                    model="claude-haiku-4-5",
-                    max_tokens=4096,
-                    temperature=0,
-                    system=system_prompt,
-                    tools=[
-                        {
-                            "name": "provide_candidates",
-                            "description": "Provide a list of UNIQUE person candidates. Each candidate must be a different individual.",
-                            "input_schema": {
-                                "type": "object",
-                                "properties": {
-                                    "candidates": {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "id": {
-                                                    "type": "string",
-                                                    "description": "Unique identifier combining name + occupation + location"
-                                                },
-                                                "name": {
-                                                    "type": "string",
-                                                    "description": "Full name without titles"
-                                                },
-                                                "description": {
-                                                    "type": "string",
-                                                    "description": "Format: 'Primary Occupation • Company/Organization • Location'"
-                                                },
-                                                "occupation": {
-                                                    "type": "string",
-                                                    "description": "Primary job title or profession (e.g., 'Regional Director', 'Actress', 'Systems Engineer')"
-                                                },
-                                                "currentCompany": {
-                                                    "type": ["string", "null"],
-                                                    "description": "Current employer or organization name"
-                                                },
-                                                "location": {
-                                                    "type": "string",
-                                                    "description": "City and Country (e.g., 'London, England' or 'Golden, Colorado, USA')"
-                                                },
-                                                "imageUrl": {
-                                                    "type": ["string", "null"],
-                                                    "description": "URL to profile photo or null if not found"
-                                                }
-                                            },
-                                            "required": ["id", "name", "description", "occupation", "currentCompany", "location", "imageUrl"]
-                                        },
-                                        "maxItems": max_candidates,
-                                        "uniqueItems": True
-                                    }
-                                },
-                                "required": ["candidates"]
-                            }
-                        },
-                    ],
-                    tool_choice={
-                        "type": "tool",
-                        "name": "provide_candidates"
-                    },
-                    messages=messages
-                )
-
-                for content_block in final_response.content:
-                    if content_block.type == "tool_use" and content_block.name == "provide_candidates":
-                        candidates = content_block.input.get("candidates", [])
+            if not candidates:
+                logger.warning(f"No candidates found for query: {query}")
+            else:
+                logger.info(f"Claude web search returned {len(candidates)} candidate(s) for '{query}'")
             
-            logger.info(f"Claude web search returned {len(candidates)} candidates")
-            return candidates
+            return candidates            
 
         except Exception as e:
             logger.error(f"Error finding candidates via Claude web search: {str(e)}")
